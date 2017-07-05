@@ -1531,7 +1531,7 @@ void pad_ref_hap(dgraph_t *g, hseqs *h, haps_t *ref, int *S) {
 
 
 //#define POS_SHIFT 96424470
-#define POS_SHIFT 1
+#define POS_SHIFT 2
 
 // seq2cigar based on the old haplotypes() output
 void seq2cigar(dgraph_t *g, char *seq, int len, char *name) {
@@ -2067,7 +2067,7 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	// Trace path for each successive node.
 	char *s1 = seq+i;
 	char s2[MAX_KMER*2];
-	for (; i < len; i++) {
+	for (; i <= len - g->kmer; i++) {
 	    last = n;
 	    if (i == len-g->kmer) {
 		memcpy(s2, seq+i, g->kmer);
@@ -2140,6 +2140,9 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	    }
 	}
 
+	if (cig_op == 'I')
+	    cig_op = 'S';
+
 	if (i+g->kmer-1 < len) {
 	    // trailing unaligned. FIXME: align it or soft-clip as appropriate.
 	    ADD_CIGAR('S', len-(i+g->kmer-1));
@@ -2148,7 +2151,7 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	ADD_CIGAR(0, 0); // flush
     } else {
 	// Unmapped
-	printf("%d\t0\t*\t", pos+POS_SHIFT);
+	printf("%d\t0\t*", pos+POS_SHIFT);
     }
 
     printf("\t*\t0\t0\t%.*s\t*\n", len, seq);
@@ -2500,7 +2503,7 @@ haps_t *compute_consensus(dgraph_t *g) {
     h->seq = seq.s;
     h->pos = 0;
 
-    //puts(seq.s);
+    printf("Cons = %s\n", seq.s);
 
     return h;
 }
