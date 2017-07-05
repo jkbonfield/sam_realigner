@@ -19,6 +19,20 @@ with the vector being unrelated to the hash key, but instead to the
 appropriate location within the string.
  */
 
+
+/*
+ * TODO
+ *
+ * - Merge bubbles in better order.  Most significant first?  Smallest first?
+ *   See eg13.fa for an example fail.
+ *
+ * - Don't assume the first KMER bases are all match.  Only the last we know
+ *   to match.  Instead align back to ref.
+ *
+ *   Consider pass 1.  Get consensus.  Add kmer-1 consensus bases to start of all
+ *   reads and realign.  Then emit seq using cigar for kmer-1 matches onwards?
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -2552,7 +2566,10 @@ haps_t *load_fasta(char *fn, int *nhaps) {
 	l = strlen(line);
 	if (line[l-1] == '\n')
 	    line[l-1] = 0;
-	h[nh].seq = strdup(line);
+	char *line_start = line;
+	while (isspace(*line_start))
+	    line_start++;
+	h[nh].seq = strdup(line_start);
 	h[nh].pos = 0;
 
 	nh++;
