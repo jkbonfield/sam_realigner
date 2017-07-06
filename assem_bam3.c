@@ -2095,6 +2095,8 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 
 	if (first_go) {
 	    memset(sub, 'N', g->kmer);
+	    memset(sub_k, 'N', i);
+	    sub_k += i;
 	
 	    // First node found has kmer bases, but we only know the position of
 	    // the last base.  Greedy match backwards to determine the correct
@@ -2107,8 +2109,6 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	    for (j = 1; j < g->kmer; j++) {
 		int k;
 		node_t *sn = NULL;
-		if (*(sub_k-j) != 'N' || n->n_hi < 1)
-		    break;
 	    up_one:
 		//printf("Search for %.*s", g->kmer, sub_k-j);
 		for (k = 0; k < n->n_in; k++) {
@@ -2122,9 +2122,9 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 			    sn = s2;
 			    break;
 			}
-			if (sn)
-			    break;
 		    }
+		    if (sn)
+			break;
 		}
 		if (!sn) {
 		    //printf(" => not found, try one up\n");
@@ -2139,8 +2139,8 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 		    break;
 	    }
 
-	    seq_start = -(j-1);
-	    seq = sub_k;
+	    seq_start = -(j-1)+i;
+	    seq = sub_k-i;
 	    //printf("New seq = %.*s\n", len - seq_start, seq + seq_start);
 	    first_go = 0;
 	    goto try_again;
