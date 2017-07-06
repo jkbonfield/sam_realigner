@@ -28,9 +28,6 @@ appropriate location within the string.
  *
  * - Don't assume the first KMER bases are all match.  Only the last we know
  *   to match.  Instead align back to ref.
- *
- *   Consider pass 1.  Get consensus.  Add kmer-1 consensus bases to start of all
- *   reads and realign.  Then emit seq using cigar for kmer-1 matches onwards?
  */
 
 #include <stdio.h>
@@ -504,6 +501,22 @@ int ref_edge(dgraph_t *g, edge_t *e) {
 
 int ref_node(dgraph_t *g, int id) {
     return g->node[id]->ref;
+}
+
+// Returns the best previous node, scored by incoming edge count
+node_t *best_prev_node(dgraph_t *g, node_t *n) {
+    if (!n)
+	return NULL;
+
+    int best_i = 0, best_count = INT_MIN;
+    int i;
+    for (i = 0; i < n->n_in; i++) {
+	if (best_count < n->in[i]->count) {
+	    best_count = n->in[i]->count;
+	    best_i = i;
+	}
+    }
+    return best_count != INT_MIN ? g->node[n->in[best_i]->n[1]] : NULL;
 }
 
 // TODO:
@@ -2050,12 +2063,22 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
     int i;
     node_t *n, *last = NULL;
     int cig_op = 0, cig_len = 0;
+    int first_go = 1;
+    int seq_start = 0;
+    char *orig_seq = seq;
 
     if (!len)
 	len = strlen(seq);
 
+    char *sub = malloc(g->kmer + len + 1), *sub_k = sub + g->kmer;
+    memcpy(sub_k, seq, len);
+    sub_k[len] = 0;
+
+    //printf("Orig seq = %.*s\n", len, seq);
+
+ try_again:
     // First node
-    for (i = 0; i < len-g->kmer; i++) {
+    for (i = seq_start; i < len-g->kmer; i++) {
 	if ((n = find_node(g, seq+i, g->kmer, 0)) && n->pos >= 0 && n->pruned == 0)
 	    break;
     }
@@ -2067,16 +2090,70 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 
     int pos = 0, j, padded = 0;
 
-    printf("%s\t0\t10\t", name);
-
     if (n->pos >= 0) {
 	pos = n->pos-1;
-	printf("%d\t0\t", pos+POS_SHIFT);
-	if (i) {
-	    // Start of read is unaligned.  Align back to ref or just soft-clip.
-	    ADD_CIGAR('S', i);
+
+	if (first_go) {
+	    memset(sub, 'N', g->kmer);
+	
+	    // First node found has kmer bases, but we only know the position of
+	    // the last base.  Greedy match backwards to determine the correct
+	    // path for earlier bases.  We simply scan upwards on our (now linear)
+	    // graph to find the precursor, replacing Ns with the base found.
+	    // This then permits us to start the process again, but this time
+	    // using the known prefix sequence to anchor all bases rather than
+	    // just the last base in the kmer from our hash hit.
+	    //printf("\nFound %.*s => %p, subset of %.*s\n", g->kmer, seq+i, n, g->kmer*2, sub);
+	    for (j = 1; j < g->kmer; j++) {
+		int k;
+		node_t *sn = NULL;
+		if (*(sub_k-j) != 'N' || n->n_hi < 1)
+		    break;
+	    up_one:
+		//printf("Search for %.*s", g->kmer, sub_k-j);
+		for (k = 0; k < n->n_in; k++) {
+		    node_t *s2 = g->node[n->in[k]->n[1]];
+		    int h;
+		    for (h = 0; h < s2->n_hi; h++) {
+			if (memcmp(sub_k-j+1, s2->hi[h]->key+1, g->kmer-1) == 0) {
+			    // Matches bar first N, fix base
+			    *(sub_k-j) = *s2->hi[h]->key;
+			    //printf(" => %.*s\n", g->kmer, sub_k-j);
+			    sn = s2;
+			    break;
+			}
+			if (sn)
+			    break;
+		    }
+		}
+		if (!sn) {
+		    //printf(" => not found, try one up\n");
+		    n = best_prev_node(g, n);
+		    if (n)
+			goto up_one;
+		} else {
+		    n = sn;
+		}
+
+		if (!n)
+		    break;
+	    }
+
+	    seq_start = -(j-1);
+	    seq = sub_k;
+	    //printf("New seq = %.*s\n", len - seq_start, seq + seq_start);
+	    first_go = 0;
+	    goto try_again;
 	}
-	ADD_CIGAR('M', g->kmer-1);
+
+
+	printf("%s\t0\t10\t", name);
+	printf("%d\t0\t", pos+POS_SHIFT);
+	// Start of read is unaligned.  Align back to ref or just soft-clip.
+	if (i + g->kmer-1 > 0)
+	    ADD_CIGAR('S', i + g->kmer-1);
+
+	//ADD_CIGAR('M', g->kmer-1);
 
 	// Trace path for each successive node.
 	char *s1 = seq+i;
@@ -2165,10 +2242,13 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	ADD_CIGAR(0, 0); // flush
     } else {
 	// Unmapped
+	printf("%s\t0\t10\t", name);
 	printf("%d\t0\t*", pos+POS_SHIFT);
     }
 
-    printf("\t*\t0\t0\t%.*s\t*\n", len, seq);
+    printf("\t*\t0\t0\t%.*s\t*\n", len, orig_seq);
+
+    free(sub);
 }
 
 int int64_compar(const void *vp1, const void *vp2) {
@@ -2417,6 +2497,8 @@ void fix_seqs(haps_t *h, int n) {
 // Find the node with the highest count.
 // Backtrack up from here and recurse down from here following
 // the highest scoring path in all cases.
+//
+// Add kmer-1 Ns to front. This helps in the CIGAR generation later.
 haps_t *compute_consensus(dgraph_t *g) {
     int i, j;
 
@@ -2482,6 +2564,8 @@ haps_t *compute_consensus(dgraph_t *g) {
 	    n = NULL;
 	}
     }
+    for (i = 0; i < g->kmer-1; i++)
+	kputc('N', &seq);
     for (i = 0, j = seq.l-1; i < j; i++, j--) {
 	char tmp = seq.s[i];
 	seq.s[i] = seq.s[j];
@@ -2659,6 +2743,11 @@ int main(int argc, char **argv) {
     if (argc > 2) {
 	fprintf(stderr, "===> Adding reference\n");
 	ref = load_fasta(argv[2], 0);
+	int ref_len = strlen(ref->seq);
+	ref->seq = realloc(ref->seq, ref_len + g->kmer-1 + 1);
+	ref->seq[ref_len + g->kmer-1] = 0;
+	memmove(ref->seq + g->kmer-1, ref->seq, ref_len);
+	memset(ref->seq, 'N', g->kmer-1);
 	add_seq(g, ref->seq, 0, 1);
     }
 
@@ -2669,11 +2758,10 @@ int main(int argc, char **argv) {
 
     graph2dot(g, "g.dot", 0);
 
-    // If no reference, compute one from the consensus instead
-    if (!ref) {
-	ref = compute_consensus(g);
-	add_seq(g, ref->seq, 0, 1);
-    }
+    haps_t *cons = compute_consensus(g);
+    add_seq(g, cons->seq, 0, ref?0:1);
+    if (!ref)
+	ref = cons;
 
     // Merge in head & tail tips
     int merged;
