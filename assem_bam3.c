@@ -161,6 +161,14 @@ typedef struct haps {
 #  define MAX_KMER 100
 #endif
 
+#ifndef MAX_SEQ
+#  define MAX_SEQ 1024
+#endif
+
+#ifndef MAX_EDGE
+#  define MAX_EDGE 5
+#endif
+
 struct edge;
 
 typedef struct node_t {
@@ -168,8 +176,7 @@ typedef struct node_t {
     int n_hi;
     int bases[MAX_KMER][5];
     int base_count;
-    // FIXME: I'm not sure 5 is valid max once we start merging.
-    struct edge *in[5], *out[5]; // incoming and outgoing edges
+    struct edge *in[MAX_EDGE], *out[MAX_EDGE]; // incoming and outgoing edges
     int n_in, n_out;
     int pruned;
     int id;
@@ -360,6 +367,8 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
 	return NULL;
 
     // Add edge itself
+    if (n1->n_out >= MAX_EDGE)
+	return NULL;
     n1->out[n1->n_out++] = edge;
     edge->n[0] = n1->id;
     edge->n[1] = n2->id;
@@ -373,6 +382,8 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
     edge_t *i_edge = malloc(sizeof(*edge));
     if (!i_edge)
 	return NULL;
+    if (n1->n_in >= MAX_EDGE)
+	return NULL;
     n2->in[n2->n_in++] = i_edge;
     i_edge->n[0] = n2->id;
     i_edge->n[1] = n1->id;
@@ -385,6 +396,8 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
 void move_edge_in(dgraph_t *g, edge_t *e, node_t *n1, node_t *n2) {
     node_t *n3 = g->node[e->n[1]];
     int j;
+    if (n1->n_out >= MAX_EDGE)
+	return;
     n1->out[n1->n_out++] = e;
     for (j = 0; j < n3->n_in; j++)
 	if (n3->in[j]->n[1] == n2->id)
@@ -443,6 +456,43 @@ edge_t *incr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int r
     e->count++;
 
     return e;
+}
+
+int loop_check_recurse(dgraph_t *g, node_t *n, int lc_start, int lc_now) {
+    if (n->visited > lc_start && n->visited < lc_now)
+	return 0; // checked previously.
+
+    if (n->visited == lc_now)
+	return -1;
+    n->visited = lc_now;
+
+    int i;
+    for (i = 0; i < n->n_out; i++)
+	if (loop_check_recurse(g, g->node[n->out[i]->n[1]], lc_start, lc_now) < 0)
+	    return -1;
+
+    return 0;
+}
+
+
+int loop_check(dgraph_t *g) {
+    int i, j;
+    static int loop_check = 1<<30;
+
+    int lc_start = loop_check;
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+
+	// Find graph starting points
+	if (n->pruned || n->n_in > 0)
+	    continue;
+
+	// See if it's something we've been to before.
+	if (loop_check_recurse(g, n, lc_start, ++loop_check) < 0)
+	    return -1;
+    }
+
+    return 0;
 }
 
 int add_seq(dgraph_t *g, char *seq, int len, int ref) {
@@ -806,13 +856,15 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		    n1->hi[n1->n_hi++] = hi;
 		}
 
-		// Merge incoming
+		// Merge incoming.
 		for (i = 0; i < n2->n_in; i++) {
 		    for (j = 0; j < n1->n_in; j++)
 			if (n1->in[j]->n[1] == n2->in[i]->n[1] ||
 			    (x2+1 < np2 && n2->in[i]->n[1] == path2[x2+1]->id))
 			    break;
 		    if (j == n1->n_in && n2->in[i]->n[1] != start) { // not already a parent
+			if (n1->n_in >= MAX_EDGE)
+			    continue;
 			n1->in[n1->n_in++] = n2->in[i];
 			node_t *n3 = g->node[n2->in[i]->n[1]];
 			move_edge_out(g, n3, n2, n1);
@@ -1154,6 +1206,7 @@ void find_bubbles(dgraph_t *g, int use_ref) {
 
 	    if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
 		//printf("Graph start at %d\n", i);
+
 		found += find_bubble_from2(g, i, use_ref);
 		//break; // only really need main start point?  Unknown...
 	    }
@@ -2183,8 +2236,8 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 
 		// bubble up to check if D or P before I
 		node_t *np = NULL, *nn = n;
-		int path[MAX_KMER] = {0}, path_ind = 0;
-		for (;last && last != np; nn=np) {
+		int path[MAX_SEQ] = {0}, path_ind = 0;
+		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
 		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
 		    if (!np)
 			break;
@@ -2196,6 +2249,9 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 			    break;
 		    path[path_ind++] = i;
 		}
+
+		if (path_ind == MAX_SEQ)
+		    goto fail;
 
 		// Now replay the path in order from last->n
 		np = last;
@@ -2209,6 +2265,8 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 		    } else {
 			ADD_CIGAR('P', 1);
 		    }
+		    if (path[path_ind] >= np->n_out)
+			goto fail; // under what scenario does this happen?
 		    np = g->node[np->out[path[path_ind]]->n[1]];
 		}
 	    
@@ -2234,6 +2292,7 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	if (cig_op == 'I')
 	    cig_op = 'S';
 
+    fail:
 	if (i+g->kmer-1 < len) {
 	    // trailing unaligned. FIXME: align it or soft-clip as appropriate.
 	    ADD_CIGAR('S', len-(i+g->kmer-1));
@@ -2723,14 +2782,18 @@ int main(int argc, char **argv) {
 	g = graph_create(kmer);
 	for (i = 0; i < nhaps; i++) {
 	    if (add_seq(g, haps[i].seq, 0, 0) != 0)
+		// loop within a sequence
 		break;
 	}
-	if (i == nhaps)
+	if (i == nhaps && loop_check(g) == 0) {
+	    fprintf(stderr, "Loop detected, increasing kmer\n");
+	    // loop check between sequences
 	    break;
+	}
 
 	graph_destroy(g);
     }
-    if (kmer == MAX_KMER) {
+    if (kmer >= MAX_KMER) {
 	fprintf(stderr, "No suitable kmer found\n");
 	return 1;
     }
