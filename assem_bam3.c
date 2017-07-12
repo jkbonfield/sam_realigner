@@ -525,7 +525,7 @@ int loop_check(dgraph_t *g) {
 	}
 
 	// Node links back to previously scanned head
-	if (n->visited != 0)
+	if (n->visited != 999)
 	    continue;
 
 	// Fixme: could remove tips here so we don't keep
@@ -2873,8 +2873,10 @@ int main(int argc, char **argv) {
     // Successive rounds allows for fixing more than 1 error in a read.
     fprintf(stderr, "Correcting\n");
     correct_errors(haps, nhaps, 3);
-    correct_errors(haps, nhaps, 4);
-    correct_errors(haps, nhaps, 5);
+//    correct_errors(haps, nhaps, 4);
+//    correct_errors(haps, nhaps, 5);
+//    correct_errors(haps, nhaps, 5);
+//    correct_errors(haps, nhaps, 5);
 
     for (; kmer < MAX_KMER; kmer += 10) {
 	fprintf(stderr, "Building graph with kmer=%d\n", kmer);
