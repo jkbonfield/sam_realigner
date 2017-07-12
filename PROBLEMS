@@ -1,0 +1,306 @@
+eg3f: 4/5 excessive clipping, just discard?  Why not also 7/8?
+eg3g: unaligned 4.
+eg4f: >12 is lost in output (no kmers match)
+eg4h: wrong alignment due to ordering of joining bubbles
+
+eg3E: need 1I 1P instead of 1I to be explicit?  Maybe OK. Similarly 3H.
+eg3G: should >3 be 6M 1P 1I 1P 6M?  We do if we have more reads.  Maybe OK
+eg3K: suspect >3 should also be 11M as better to call the 3 way SNP.
+
+
+=============================================================================
+
+3e
+
+ATAAACTTTAGAGC
+||||||||||||||
+ATAAACTTTAGAGC 14M
+ATAAAGTTTCGAGC 14M
+ATAAA   T GAGC 5M 3D 1M 1D 4M
+
+
+-----------------------------------------------------------------------------
+3f
+
+r ATAAACTTTAGAGCCCTA
+
+1 ATAAACTTTAGAGC     14M
+2 ATAAAGTTTCGAGC     14M
+3 ATAAA   T GAGC     5M 3D 1M 1D 4M
+4     ccaaTtg        4S1M2S - courageous!
+5     gcaaTtg        4S1M2S - courageous!
+6       TTT  AGac    6M 2D 2S
+7 (AGGCTT)           unaligned
+8 (CGGCTT)           unaligned
+9           GA  CCg  2M 2D 2M 1S
+10          GA  CCT  2M 2D 3M
+11           AGCCC   5M
+12 (TTGG)
+
+-----------------------------------------------------------------------------
+3g
+
+ATAAACTTTAGAGC 14M
+ATAAAGTTTCGAGC 14M
+ATAAA   T GAGC 5M 3D 1M 1D 4M
+       TT GA   (*) unaligned
+
+-----------------------------------------------------------------------------
+3h
+
+TCTTGAACCGT 11M
+TCTTAAGCCGT 11M
+
+-----------------------------------------------------------------------------
+3A
+
+Ref ACATGGCCTTA
+     CATG ACTTA 4M 1D 5M
+     CATG CCTTA 4M 1D 5M
+
+-----------------------------------------------------------------------------
+3B
+
+ACATGG CCTTA
+ CATGGACCTTA 5M 1I 5M
+ CATG ACCTTA 4M 1D 1I 5M
+
+-----------------------------------------------------------------------------
+3C
+
+ACATGGCCTTA
+ACAT ACCTTA  4M 1D 6M
+ACAT AGCTTA  4M 1D 6M
+
+-----------------------------------------------------------------------------
+3D
+
+ACATG GCCTTA
+ CATGAGCCTTA 4M 1I 6M
+ CATGA CCTTA 4M 1I 1D 5M
+-----------------------------------------------------------------------------
+
+-----------------------------------------------------------------------------
+3E
+ACATGG  CCTTA
+ CATGGATCCTTA 5M 2I      5M
+ CATGGA CCTTA 5M 1I (1P) 5M  1P missing
+
+-----------------------------------------------------------------------------
+3F
+
+ACATGG  CCTTA
+ CATGGATCCTTA 5M    2I 5M
+ CATGG TCCTTA 5M 1P 1I 5M
+
+-----------------------------------------------------------------------------
+3G
+
+ACATGG   CCTTA
+
+ACATGGATACCTTA 6M 3I       6M
+ACATGGA ACCTTA 6M 1I 1P 1I 6M
+ACATGG T CCTTA 6M 1P 1I(1P)6M  (we get 6M 2P 1I 6M - err).
+
+-----------------------------------------------------------------------------
+3H
+r TGAG         GCCT
+1 TGAGAACTTTCAAGCCT 4M 9I       4M
+2 TGAGAAC   CAAGCCT 4M 3I 3P 3I 4M
+3 TGAG   TTT   GCCT 4M 3P 3I(3P)4M
+
+-----------------------------------------------------------------------------
+3I
+
+r TGAGAAC      GCCT
+1 TGAGAACTTTCAGGCCT 7M    6I    4M
+2 TGAGAAC   CAGGCCT 7M    3P 3I 4M
+3 TGAG   TTT   GCCT 4M 3D 3I(3P)4M
+4 TGAGAAC      GCCT 11M
+5 TGAG      CAGGCCT 4M 3D 3P 3I 4M
+
+-----------------------------------------------------------------------------
+3J
+
+r TGAG      CAGGCCT
+1 TGAGAACTTTCAGGCCT 4M 6I       7M
+2 TGAGAAC   CAGGCCT 4M 3I(3P)   7M
+3 TGAG   TTT   GCCT 4M 3P 3I 3D 4M
+4 TGAGAAC      GCCT 4M 3I(3P)3D 4M
+5 TGAG      CAGGCCT 11M
+
+-----------------------------------------------------------------------------
+3K
+
+r TGAGCATT GGC
+1 TGAGCATT GGC 11M
+2 TGAGCCTT GGC 11M
+3 TGAGC TTTGGC 5M 1D 2M 1I 3M
+
+Why not 11M for all? Better score this way? Suspect.
+
+=============================================================================
+
+4a
+
+r AGCTAGCGTACGTGA
+a AGCTAGCGTACGTGA 15M
+b AGCTATTGTACGTGA 15M
+
+-----------------------------------------------------------------------------
+4b
+
+r AGCTAGCGTACGTGA
+a AGCTAGCGTACGTGA 15M
+b AGCTAG  TACGTGA 6M 2D 7M
+
+-----------------------------------------------------------------------------
+4c
+
+r AGCTAGC GTACGTGA
+a AGCTAGC GTACGTGA 15M
+b AGCTAGCAGTACGTGC 7M 1I 7M 1S
+
+-----------------------------------------------------------------------------
+4d
+
+ref AGCTAGCGTACGTGA
+k4a AGCTAGCGTACGTGA 15M
+k4a AGCTAGCGTACGTGA 15M
+k4a AGCTAGCGTACGTGA 15M
+k4b AGCTAG  TACGTGA 6M 2D 7M
+k4b AGCTAG  TACGTGA 6M 2D 7M
+k4b AGCTAG  TACGTGA 6M 2D 7M
+k4c AGCTAG  TACGGGA 6M 2D 7M
+k4d ACCTAGCGTACGTGA 2S 13M
+
+-----------------------------------------------------------------------------
+4f
+
+ref ATAAAGTTTAGAGC
+3   ATAAA   T GAGC 5M 3D 1M 1D 4M (prefer 6M 4D 4M or 5M 4D 5M)
+6         TTTAGAC  6M 1S
+1   ATAAACTTTAGAGC 14M
+2   ATAAAGTTTCGAGC 14M
+12  (TTGG) lost!
+
+-----------------------------------------------------------------------------
+4g
+
+r ATAAAGTTTAGAGC
+1 ATAAACTTTAGAGC 14M
+2 ATAAAGTTTCGAGC 14M
+
+-----------------------------------------------------------------------------
+4h
+
+r  ATAAAG  TTTATAGCCC
+
+M  ATAAAG  TTTATAGCCC 16M
+I  ATAAAGCGTTTATAGCCC 6M 2I    10M
+D  ATAAAG     ATAGCCC 6M    3D 10M (have 6M    1D 1M 2D 6M; wrong)
+ID ATAAAGCG   ATAGCCC 6M 2I 3D 10M (have 6M 2I 1D 1M 2D 6M; wrong)
+DI ATAAAG   AAATAGCCC 6M    1D 9M  (seems ok; 1bp snp to ref vs 2bp snp to ins)
+
+R AAAGTTATAG
+1 AAAGTTATAG 1st (2bp diff between 1 & 2)
+2 AAAG  ATAG 1st
+3 AAAG AATAG
+
+vs
+
+R AAAGTTATAG
+1 AAAGTTATAG
+2 AAAG A TAG 1st (1bp diff between 2 & 3, pads to right; A* not *A)
+3 AAAG AATAG 1st
+
+Possible solution, vs ref, alignment pad was left of *ATAG.  2 vs 3 pad
+is same score A* and *A, so pick same way original went and not always
+fixed?
+
+2nd possible solution, merge bubbles in order of longest sequences
+first. Ie:
+
+R AAAGTTATAG
+1 AAAGTTATAG 1st
+3 AAAG AATAG 1st
+=>AAAGtNATAG
+2 AAAG  ATAG 2nd
+
+[TA]A gives *A as better alignment than A* due to 100% match vs 50/50.
+
+
+----------------------------------------------------------------------------
+4i
+
+ref  TGACTGCAACT
+a1   TGACTGCAACT  11M
+a2   TGACT CAACT  5M 1D 5M
+b1    GACTGCAAC   9M
+b2    GACT CAAC   4M 1D 4M
+c1     ACTGCAA    7M
+c2     ACT CAA    3S 3M (want 3M 1D 3M, but kmer too large)
+err1  tttTGCAACT  3S 7M
+err2  tACT CAAC   4S 4M (want 1S 3M 1D 4M, but kmer too large)
+err3   tCTGCAA    1S 6M
+err4   tCT CAA    3S 3M (want " " ")
+
+-----------------------------------------------------------------------------
+4F
+
+1  ATAAACTTTAGAGC 14M
+2  ATAAAGTTTCGAGC 14M
+6        TTTAGAC  6M 1S
+3  ATAAA   T GAGC 5M 3D 1M 1D 4M (want 5M 4D 5M0
+
+11 AGCCC          *
+12 TTGG
+9  GACCG
+10 GACCT
+5  GCAATTG
+4  CCAATTG
+7  AGGCTT
+8  CGGCTT
+
+-----------------------------------------------------------------------------
+4H
+M  AAAGTTATAG 10M
+D  AAAG A TAG 4M 1D 1M 1D 3M
+DI AAAG AATAG 4M 1D       5M
+
+want:
+
+M  AAAGTTATAG 10M
+D  AAAG  ATAG 4M 2D 4M
+DI AAAG AATAG 4M 1D 5M
+
+-----------------------------------------------------------------------------
+13a
+
+r GTGAATGGATATTATTATTATTATCAGAAAGGGTTT
+  GTGAATGGATATTGTTA      TCAGAAAGGGTTT 17M 6D 13M
+  GTGAATGGATATTATTATTAT   CAGAAAGGGTTT 21M 3D 12M
+  GTGAATGGATATTATTATTATTATCAGAAAGGGTTT 36M
+  GTGAATGGATATTATTATTAT   CAGAAAGGGTTT 21M 3D 12M
+  GTGAATGGATATTGT         CAGAAAGGGTTT 15M 9D 12M
+  GTGAATGGATATTATTAT      CAGAAAGGGTTT 18M 6D 12M
+
+-----------------------------------------------------------------------------
+18a
+
+TGTTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 19M 6D 18M
+TGTTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 19M 6D 18M
+TGTTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 19M 6D 18M
+TGTTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 19M 6D 18M
+  TTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 17M 6D 18M
+  TTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 17M 6D 18M
+  TTTTTCGAAATAATGGT      CCACAGAGATCAAATCTA 17M 6D 18M
+TGTTTTTCGAAATAATGGTAATAATCCACAGAGATCAAATCTA 43M
+TGTTTTTCGAAATAATGGTAATAATCCACAGAGATCAAATCTA 43M
+TGTTTTTCGAAATAATGGTAATAATCCACAGAGATCAAATCTA 43M
+TGTTTTTCGAAATAATGGTAATAATCCACAGAGATCAAATCTA 43M
+TGTTTTTCGAAATAATGGTAATAATCCACAGAGATCAAATCTA 43M
+
+
+-----------------------------------------------------------------------------
+

@@ -28,6 +28,8 @@ appropriate location within the string.
  *
  * - Don't assume the first KMER bases are all match.  Only the last we know
  *   to match.  Instead align back to ref.
+ *
+ * - Fix eg4h/H.  We could try merging longest bubbles before shorter ones?
  */
 
 #include <stdio.h>
@@ -458,40 +460,86 @@ edge_t *incr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int r
     return e;
 }
 
-int loop_check_recurse(dgraph_t *g, node_t *n, int lc_start, int lc_now) {
-    if (n->visited > lc_start && n->visited < lc_now)
-	return 0; // checked previously.
-
-    if (n->visited == lc_now)
-	return -1;
-    n->visited = lc_now;
-
-    int i;
-    for (i = 0; i < n->n_out; i++)
-	if (loop_check_recurse(g, g->node[n->out[i]->n[1]], lc_start, lc_now) < 0)
+// We ensure this node is not within our previous list of visited nodes.
+static int loop_check_recurse(dgraph_t *g, node_t *n, char *visited) {
+    // Simple linear list
+    do {
+	if (n->id >= g->nnodes || visited[n->id])
 	    return -1;
+
+	visited[n->id] = 1;
+    } while (n->n_out == 1 && (n = g->node[n->out[0]->n[1]]));
+
+    if (n->n_out == 0)
+	return 0;
+
+    // Fork.  We take a copy of visited[] and recurse.
+    int i;
+    char *vis2 = malloc(g->nnodes);
+    if (!vis2)
+	return -1;
+    for (i = 0; i < n->n_out; i++) {
+	memcpy(vis2, visited, g->nnodes);
+	if (loop_check_recurse(g, g->node[n->out[i]->n[1]], vis2) < 0) {
+	    free(vis2);
+	    return -1;
+	}
+    }
+    free(vis2);
 
     return 0;
 }
 
 
+// Bad complexity: O(N^2).  FIXME: need a better loop finding algorithm.
 int loop_check(dgraph_t *g) {
     int i, j;
-    static int loop_check = 1<<30;
+    char *visited = malloc(g->nnodes);
+    if (!visited)
+	return -1;
 
-    int lc_start = loop_check;
+    int visit = 999;
+    for (i = 0; i < g->nnodes; i++)
+	g->node[i]->visited = visit;
+
     for (i = 0; i < g->nnodes; i++) {
 	node_t *n = g->node[i];
 
 	// Find graph starting points
-	if (n->pruned || n->n_in > 0)
+	if (n->pruned)
 	    continue;
 
-	// See if it's something we've been to before.
-	if (loop_check_recurse(g, n, lc_start, ++loop_check) < 0)
+	// We have a node, but recurse back to *a* head node.
+	// (This is also capable of spotting loops.) We need
+	// this here for the simple a->b->a loop which has no
+	// head/tip as each node has n->in > 0.
+	++visit;
+	while (n->visited == 0 && n->n_in > 0) {
+	    n->visited = visit;
+	    n = g->node[n->in[0]->n[1]];
+	}
+	// Self loop
+	if (n->visited == visit) {
+	    free(visited);
 	    return -1;
+	}
+
+	// Node links back to previously scanned head
+	if (n->visited != 0)
+	    continue;
+
+	// Fixme: could remove tips here so we don't keep
+	// rechecking.
+	memset(visited, 0, g->nnodes);
+
+	// See if it's something we've been to before.
+	if (loop_check_recurse(g, n, visited) < 0) {
+	    free(visited);
+	    return -1;
+	}
     }
 
+    free(visited);
     return 0;
 }
 
@@ -499,10 +547,21 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
     int i, j;
     static int counter = 1;
 
-    counter++;
-
     if (!len)
 	len = strlen(seq);
+
+    if (!ref) {
+	// Prune trailing Ns.
+	while (*seq == 'N' && len > 0)
+	    seq++, len--;
+	while (seq[len-1] == 'N' && len > 0)
+	    len--;
+
+	if (len == 0)
+	    return 0;
+    }
+
+    counter++;
 
     char *s = malloc(len);
     for (i = j = 0; i < len; i++)
@@ -516,10 +575,8 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 	if (!(e = incr_edge(g, s+i, g->kmer, s+i+1, g->kmer, ref)))
 	    return -1;
 
-	if (g->node[e->n[1]]->visited == counter) {
-	    fprintf(stderr, "loop detected\n");
+	if (g->node[e->n[1]]->visited == counter)
 	    return -1; // loop
-	}
 
 	g->node[e->n[1]]->visited = counter;
 
@@ -920,26 +977,61 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		// Insertion in path2, link into path1
 		if (!n1)
 		    n1 = g->node[start]; // if inserting to end of alignment
+		int first_ins = 1;
 		while (op--) {
 		    printf("I  - %2d\n", n2->id);
 
-		    n2->in[0]->n[1] = l1->in[0]->n[1]; // FIXME: plus edge hash
-		    l1->in[0]->n[1] = n2->id;          // FIXME: plus edge hash
-		    for (j = 0; j < n1->n_out; j++)
-			if (n1->out[j]->n[1] == n2->id)
-			    break;
-		    if (j == n1->n_out)
-			move_edge_out(g, n1, l1, n2);
-		    for (i = 0; i < n2->n_out; i++)
-			if (n2->out[i]->n[1] == l1->id)
-			    break;
-		    if (i == n2->n_out)
-			move_edge_out(g, n2, l2, l1);
-		    l1 = l2 = n2;
-		    memcpy(n2->bases, vn[p++], 5*sizeof(int));
+		    if (first_ins) {
+			// Link l1 in to n2
+			// Link n2 out to l1
+			l1->in[0]->n[1] = n2->id; // FIXME: plus edge hash
+
+			for (j = 0; j < n2->n_out; j++)
+			    if (n2->out[j]->n[1] == l1->id)
+				break;
+			if (j == n2->n_out)
+			    // Move out n2->l2 to n2->l1
+			    move_edge_out(g, n2, l2, l1);
+
+			memcpy(n2->bases, vn[p++], 5*sizeof(int));
+			first_ins = 0;
+		    }
+
+		    if (op == 0) { // last
+			// Link n2 in to n1
+			// Link n1 out to n2
+			// Cull parent(n2) out (to n2)
+			node_t *p2 = g->node[n2->in[0]->n[1]];
+			n2->in[0]->n[1] = n1->id;
+			for (i = 0; i < n2->n_out; i++)
+			    if (n1->out[i]->n[1] == n2->id)
+				break;
+			if (i == n1->n_out)
+			    // Move n1->l1 to n1->n2
+			    move_edge_out(g, n1, l1, n2);
+
+			if (p2) {
+			    for (i = 0; i < p2->n_out; i++) {
+				if (p2->out[i]->n[1] == n2->id) {
+				    memmove(&p2->out[0], &p2->out[i],
+					    (p2->n_out - i - 1) * sizeof(p2->out[0]));
+				    p2->n_out--;
+				    i--;
+				}
+			    }
+			}
+
+			p++;
+		    }
+
 		    //n2->bases[g->kmer-1][4]++;
-		    n2 = path1[x2++];
+
+		    l2 = n2;
+		    n2 = path2[++x2];
 		}
+
+		l1 = l2;
+		n2 = n1;
 	    }
 	}
 
@@ -1191,7 +1283,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 
 void find_bubbles(dgraph_t *g, int use_ref) {
     int i, level = 0;
-    int loop = 0, found;
+    int found;
 
     do {
 	found = 0;
@@ -1493,6 +1585,12 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 #endif
     }
 
+#ifndef MIN
+#  define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
+
+#define MAX_GRAPH_KEY 100
+
 #if 1
 	// Hash key -> node map
 	HashIter *iter = HashTableIterCreate();
@@ -1500,7 +1598,8 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 	while (hi = HashTableIterNext(g->node_hash, iter)) {
 	    node_t *n = hi->data.p;
 	    fprintf(fp, " n_%.*s [label=\"%.*s\", color=\"grey\", group=%d]\n",
-	    	    hi->key_len, hi->key, hi->key_len, hi->key, n->id);
+	    	    hi->key_len, hi->key,
+		    MIN(MAX_GRAPH_KEY, hi->key_len), hi->key, n->id);
 	    fprintf(fp, " n_%.*s -> n_%d [color=\"grey\"]\n",
 	    	    hi->key_len, hi->key, n->id);
 	    //fprintf(fp, " n_%.5s [label=\"%.*s\", color=\"grey\", group=%d]\n",
@@ -1512,11 +1611,11 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 	HashTableIterDestroy(iter);
 #endif
 
-    fprintf(fp, "}\n");
+	fprintf(fp, "}\n");
 
-    if (fn)
-	return fclose(fp);
-    return 0;
+	if (fn)
+	    return fclose(fp);
+	return 0;
 }
 
 typedef struct hseq {
@@ -1598,15 +1697,15 @@ void pad_ref_hap(dgraph_t *g, hseqs *h, haps_t *ref, int *S) {
 }
 
 
-#define ADD_CIGAR(op,len)                       \
-    do {                                        \
-        if (cig_op != op) {                     \
-            if (cig_op)                         \
-                printf("%d%c", cig_len, cig_op);\
-            cig_len = 0;                        \
-            cig_op = op;                        \
-        }                                       \
-        cig_len+=len;                           \
+#define ADD_CIGAR(op,len)				\
+    do {						\
+        if (cig_op != op) {				\
+            if (cig_op)					\
+                printf("%d%c", cig_len, cig_op);	\
+            cig_len = 0;				\
+            cig_op = op;				\
+        }						\
+        cig_len+=len;					\
     } while(0)
 
 
@@ -2057,9 +2156,9 @@ void seq2cigar_h2(dgraph_t *g, char *seq, int len, char *name) {
 		np = g->node[np->out[path[path_ind]]->n[1]];
 	    }
 	    
-//	    if (-n->pos - 1 > 0 && !padded)
-//		ADD_CIGAR('P', -n->pos - 1);
-//	    padded = 1;
+	    //	    if (-n->pos - 1 > 0 && !padded)
+	    //		ADD_CIGAR('P', -n->pos - 1);
+	    //	    padded = 1;
 	    ADD_CIGAR('I', 1);
 	} else {
 	    // soft clip from here on.
@@ -2772,24 +2871,26 @@ int main(int argc, char **argv) {
     fix_seqs(haps, nhaps);
 
     // Successive rounds allows for fixing more than 1 error in a read.
-//    fprintf(stderr, "Correcting\n");
-//    correct_errors(haps, nhaps, 3);
-//    correct_errors(haps, nhaps, 3);
-//    correct_errors(haps, nhaps, 3);
+    fprintf(stderr, "Correcting\n");
+    correct_errors(haps, nhaps, 3);
+    correct_errors(haps, nhaps, 4);
+    correct_errors(haps, nhaps, 5);
 
     for (; kmer < MAX_KMER; kmer += 10) {
 	fprintf(stderr, "Building graph with kmer=%d\n", kmer);
 	g = graph_create(kmer);
 	for (i = 0; i < nhaps; i++) {
-	    if (add_seq(g, haps[i].seq, 0, 0) != 0)
+	    if (add_seq(g, haps[i].seq, 0, 0) != 0) {
 		// loop within a sequence
+		fprintf(stderr, "Loop detected within seq %s\n", haps[i].seq);
 		break;
+	    }
 	}
-	if (i == nhaps && loop_check(g) == 0) {
-	    fprintf(stderr, "Loop detected, increasing kmer\n");
-	    // loop check between sequences
+	if (i == nhaps && loop_check(g) == 0)
 	    break;
-	}
+
+	// FIXME: we get loops too often.  How and why?
+	fprintf(stderr, "Loop detected, increasing kmer\n");
 
 	graph_destroy(g);
     }
