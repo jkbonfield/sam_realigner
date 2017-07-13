@@ -1,3 +1,5 @@
+// As per assem_bam3.c but accepts SAM/BAM as input and keeps all
+// fields present in output.
 // cc -g -I$HOME/work/samtools_master/htslib assem_bam.c hash_table.c pooled_alloc.c string_alloc.c align_ss.c -DKMER=70 -lm -L$HOME/work/samtools_master/htslib -lhts -lz -pthread
 
 // ./a.out a.fasta ref.fasta > a.sam && sfdp -Gstart=24 -Gmaxiter=10 -GK=.5 -Gsplines=true -Efontsize=24 -Nshape=point  g.dot -Tpdf -o g.pdf; evince g.pdf
@@ -862,10 +864,10 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    x2++;
 	}
 
-	for (x1 = 0; x1 < p; x1++) {
-	    printf("vn[%02d]={%d,%d,%d,%d,%d}\n",
-		   x1, vn[x1][0], vn[x1][1], vn[x1][2], vn[x1][3], vn[x1][4]);
-	}
+//	for (x1 = 0; x1 < p; x1++) {
+//	    printf("vn[%02d]={%d,%d,%d,%d,%d}\n",
+//		   x1, vn[x1][0], vn[x1][1], vn[x1][2], vn[x1][3], vn[x1][4]);
+//	}
     }
 
     // Merge path2 into path1.  These are in reverse order.
@@ -886,7 +888,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    int op = *S2++;
 	    if (op == 0) {
 		// March along both paths, so merge n2 into n1.
-		printf("M %2d %2d\n", n1->id, n2->id);
+		//printf("M %2d %2d\n", n1->id, n2->id);
 
 		// Merge coordinates
 		if (n1->pos == INT_MIN) {
@@ -967,7 +969,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    } else if (op < 0) {
 		// Already in path1 only, nothing to do with path2
 		while (op++) {
-		    printf("D %2d  -\n", n1->id);
+		    //printf("D %2d  -\n", n1->id);
 		    //n1->bases[g->kmer-1][4]++;
 		    memcpy(n1->bases, vn[p++], 5*sizeof(int));
 		    n1 = path1[x1++];
@@ -979,7 +981,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		    n1 = g->node[start]; // if inserting to end of alignment
 		int first_ins = 1;
 		while (op--) {
-		    printf("I  - %2d\n", n2->id);
+		    //printf("I  - %2d\n", n2->id);
 
 		    if (first_ins) {
 			// Link l1 in to n2
@@ -1039,7 +1041,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	while (x1 < np1) {
 	    // Already in path1 only, nothing to do with path2
 	    node_t *n1 = path1[x1];
-	    printf("d %2d  -\n", n1->id);
+	    //printf("d %2d  -\n", n1->id);
 	    n1->bases[g->kmer-1][4]++;
 	    n1 = path1[x1++];
 	}
@@ -1048,7 +1050,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	node_t *n2 = path2[x2];
 	while (x2 < np2) {
 	    // Insertion in path2, link into path1
-	    printf("i  - %2d\n", n2->id);
+	    //printf("i  - %2d\n", n2->id);
 
 	    n2->in[0]->n[1] = l1->in[0]->n[1]; // FIXME: plus edge hash
 	    l1->in[0]->n[1] = n2->id;          // FIXME: plus edge hash
@@ -1136,17 +1138,17 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
     // Initialise with one path
     //printf("find_bubble_from2 node %d\n", id);
     path_add(head, g->node[id]);
-    printf("A: Node %d visisted by %d\n", id, head->id);
+//    printf("A: Node %d visisted by %d\n", id, head->id);
     g->node[id]->visited = head->id;
 
     // Iterate
     while (head && active) {
 	path_t *p, *lp = NULL, *llp, *pnext = NULL;
 
-	printf("Active paths @");
-	for (p = head; p; p = p->next)
-	    printf(" %d", p->n ? p->n->id : -1);
-	printf("\n");
+//	printf("Active paths @");
+//	for (p = head; p; p = p->next)
+//	    printf(" %d", p->n ? p->n->id : -1);
+//	printf("\n");
 
 	active = 0;
 	// Step one, move down one layer, adding/culling if needed
@@ -1215,8 +1217,8 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 
 	    if (n->visited) {
 		int merge_id = n->in[0]->n[1];
-		printf("Bubble detected with node %d (%d, %d)\n",
-		       n->id, merge_id, pn->id);
+//		printf("Bubble detected with node %d (%d, %d)\n",
+//		       n->id, merge_id, pn->id);
 		graph2dot(g, "before.dot", 0);
 
 		//rewind_paths(g, &head, merge_id, n);
@@ -1230,7 +1232,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 		else
 		    head->next = pnext;
 
-		{
+		if(0) {
 		    path_t *p;
 		    printf(" => merged nodes:");
 		    for (p = head; p; p = p->next) {
@@ -1274,7 +1276,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 	    }
 	    
 	    n->visited = p->id;
-	    printf("B: Node %d visisted by %d\n", n->id, p->id);
+//	    printf("B: Node %d visisted by %d\n", n->id, p->id);
 	}
     }
 
@@ -1697,534 +1699,58 @@ void pad_ref_hap(dgraph_t *g, hseqs *h, haps_t *ref, int *S) {
 }
 
 
-#define ADD_CIGAR(op,len)				\
-    do {						\
-        if (cig_op != op) {				\
-            if (cig_op)					\
-                printf("%d%c", cig_len, cig_op);	\
-            cig_len = 0;				\
-            cig_op = op;				\
-        }						\
-        cig_len+=len;					\
+#define ADD_CIGAR(op,len)						\
+    do {								\
+        if (cig_op != op) {						\
+	    if (cig_op != 999) {					\
+		cig_a[cig_ind++] = cig_op | (cig_len << BAM_CIGAR_SHIFT); \
+		if (cig_ind > MAX_CIGAR) return -1;			\
+	    }								\
+            cig_len = 0;						\
+            cig_op = op;						\
+        }								\
+        cig_len+=len;							\
     } while(0)
 
 
-//#define POS_SHIFT 96424470
-#define POS_SHIFT 2
+#define MAX_CIGAR 65535
 
-// seq2cigar based on the old haplotypes() output
-void seq2cigar(dgraph_t *g, char *seq, int len, char *name) {
-    int i;
-    node_t *n, *last = NULL;
-    int cig_op = 0, cig_len = 0;
-
-    if (!len)
-	len = strlen(seq);
-
-    // First node
-    for (i = 0; i < len-g->kmer; i++) {
-	if ((n = find_node(g, seq+i, g->kmer, 0)) && (n->posa && n->posa[0] >= 0) || n->pos >= 0 && n->pruned == 0)
-	    break;
-	fprintf(stderr, "Didn't find %.*s; pos %d, prune %d\n", g->kmer, seq+i,
-		n && n->posa ? n->posa[0] : -999, n ? n->pruned : -999);
-    }
-
-    if (!n) {
-	fprintf(stderr, "No match found for seq\n");
-	return;
-    }
-
-    int pos = 0, j, padded = 0;
-
-    printf("%s\t0\t10\t", name);
-
-    {
-	int j;
-	fprintf(stderr, "\n%.*s", g->kmer, seq+i);
-	//int *posa = n->posa - (g->kmer-1);
-	int *posa = n->posa;
-	for (j = 0; j < g->kmer; j++) {
-	    fprintf(stderr, " %d", posa[j]);
-	}
-	fprintf(stderr, "  --- %d\n", posa[0]);
-    }
-
-    if (n->posa) {
-	int *posa = n->posa;
-	for (j = 0; j < g->kmer; j++) {
-	    if (posa[j] >= 0) {
-		pos = posa[j];
-		break;
-	    }
-	}
-	//printf("%d\t0\t", pos+POS_SHIFT);
-	//pos--;
-
-	if (i) {
-	    fprintf(stderr, "resolve unaligned prefix\n");
-	    // Extend the alignment back up the graph via a greedy approach.
-	    // This reduces the soft-clip size for regions of high error rate.
-
-	    // FIXME: we may want to create back-edges to avoid lots of hash
-	    // table lookups.
-	    int best_count = 0;
-	    node_t *h = n, *best_h, *last_h;
-	    int ib = i;
-	    int score = 0, best_score = 0, best_i = i;
-	    char prefix[1024];
-	    memcpy(prefix, seq, i+g->kmer>1024?1024:i+g->kmer);
-
-	    while (ib < 1024-g->kmer && ib >= 1) {
-		last_h = h;
-		int last_id = last_h->id;
-		ib--;
-		best_h = NULL;
-		if ((h = find_node(g, prefix+ib, g->kmer, 0)) &&
-		    h->pos >= -99999 && h->pruned == 0) {
-		    best_h = h;
-		    score++;
-		} else {
-		    int best_j = 0;
-		    int best_count = 0;
-		    char orig = prefix[ib];
-		    for (j = 0; j < 4; j++) {
-			prefix[ib] = "ACGT"[j];
-			if ((h = find_node(g, prefix+ib, g->kmer, 0)) &&
-			    h->pos >= -99999 && h->pruned == 0) {
-			    // check this node links to the one we were from
-			    int k;
-			    for (k = 0; k < h->n_out; k++)
-				if (h->out[k]->n[1] == last_id)
-				    break;
-			    if (k == h->n_out)
-				continue;
-
-			    score-=4;
-			    if (best_count < h->out[k]->count) {
-				best_count = h->out[k]->count;
-				best_h = h;
-				best_j = j;
-			    }
-			}
-			prefix[ib] = "ACGT"[best_j];
-		    }
-		}
-
-		if (best_score < score) {
-		    best_score = score;
-		    best_i = ib;
-		}
-
-		h = best_h;
-		if (!h)
-		    break;
-	    }
-
-	    if (best_i < i && 0) {
-		printf("%d\t0\t", pos-(i-best_i)+POS_SHIFT);
-		if (best_i > 0)
-		    ADD_CIGAR('S', best_i);
-		ADD_CIGAR('M', i - best_i);
-	    } else {
-		printf("%d\t0\t", pos+POS_SHIFT);
-		ADD_CIGAR('S', i);
-	    }
-	} else {
-	    printf("%d\t0\t", pos+POS_SHIFT);
-	}
-
-	pos--;
-	for (j = 0; j < g->kmer-1; j++) {
-	    fprintf(stderr, ">%d %d< ", posa[j], pos+1);
-	    if (posa[j] == pos+1) {
-		fprintf(stderr, "1M\n");
-		ADD_CIGAR('M', 1);
-		pos++;
-	    } else if (posa[j] > pos+1) {
-		fprintf(stderr, "%dD\n", posa[j] - (pos+1));
-		ADD_CIGAR('D', posa[j] - (pos+1));
-		pos = posa[j]+1;
-	    } else if (posa[j] <= -1 && posa[j] != INT_MIN) {
-		if (-posa[j] - 1 > 0 && !padded) {
-		    fprintf(stderr, "%dP\n", -posa[j]-1);
-		    ADD_CIGAR('P', -posa[j] - 1);
-		}
-		padded = 1;
-		fprintf(stderr, "1I\n");
-		ADD_CIGAR('I',1);
-	    } else {
-		putchar('?'); // FIXME:
-	    }
-	}
-    } else {
-	pos = n->pos; // FIXME: just leave these seqs in original pos.
-	printf("%d\t0\t",pos+POS_SHIFT);
-	ADD_CIGAR('X', i+g->kmer);
-	i = len;
-    }
-
-    // Trace path for each successive node.
-    for (; i <= len-g->kmer; i++) {
-	last = n;
-	if (!(n = find_node(g, seq+i, g->kmer, 0)) || n->pruned)
-	    break;
-
-	if (n->posa) {
-	    int j;
-	    fprintf(stderr, "%.*s", g->kmer, seq+i);
-	    int *posa = n->posa;
-	    for (j = 0; j < g->kmer; j++) {
-		fprintf(stderr, " %d", posa[j]);
-	    }
-	    fprintf(stderr, "\n");
-	}
-
-	if (n->pos == pos+1) {
-	    ADD_CIGAR('M', 1);
-	    pos++;
-	} else if (n->pos > pos+1){
-	    ADD_CIGAR('D', n->pos - (pos+1));
-	    ADD_CIGAR('M', 1); // Is this correct?  Not in multiple alignment?
-	    pos = n->pos;
-	} else if (n->pos <= -1 && n->pos != INT_MIN) {
-	    if (-n->pos - 1 > 0 && !padded)
-		ADD_CIGAR('P', -n->pos - 1);
-	    padded = 1;
-	    ADD_CIGAR('I', 1);
-	} else {
-	    // soft clip from here on.
-	    // OR... an internal mismatch that was pruned.
-	    // We need to realign pruned reads back to the graph?
-	    break;
-	}
-    }
-
-    // Trawl forward from last node with a greedy scoring algorithm
-    // to see if our potential soft-clip can be aligned further.
-    if (i <= len-g->kmer) {
-	n = last;
-	int score = 0, best_score = 0, best_i = i;
-	int old_i = i;
-	while (n && 0) {
-	    char base = seq[i+g->kmer-1];
-	    int j;
-	    int best_j = 0, best_count = 0;
-	    for (j = 0; j < n->n_out; j++) {
-		node_t *t = g->node[n->out[j]->n[1]];
-		// FIXME: try multiple hash keys if n->n_hi != 1
-		if (t->hi[0]->key[g->kmer-1] == base && !t->pruned)
-		    best_j = j, best_count = INT_MAX;
-		else if (best_count < n->out[j]->count && !t->pruned)
-		    best_j = j, best_count = n->out[j]->count;
-	    }
-	    score += (best_count == INT_MAX)
-		? +1
-		: -5;
-	    i++;
-	    if (best_score < score) {
-		best_score = score;
-		best_i = i;
-	    }
-	    n = n->n_out ? g->node[n->out[best_j]->n[1]] : NULL;
-	}
-
-	if (best_score)
-	    fprintf(stderr, "Extend by %d, score %d\n", best_i - old_i, best_score);
-
-	if (best_score > 0)
-	    ADD_CIGAR('M', best_i - old_i);
-	if (best_i <= len-g->kmer)
-	    ADD_CIGAR('S', len-g->kmer+1 -best_i);
-    }
-
-    ADD_CIGAR(0, 0); // flush
-    printf("\t*\t0\t0\t%.*s\t*\n", len, seq);
+// Taken from samtools/padding.c.
+// FIXME: even though it's a direct copy from samtools, it needs fixing to
+// return a value and check mallocs.
+static void replace_cigar(bam1_t *b, int n, uint32_t *cigar)
+{
+    if (n != b->core.n_cigar) {
+        int o = b->core.l_qname + b->core.n_cigar * 4;
+        if (b->l_data + (n - b->core.n_cigar) * 4 > b->m_data) {
+            b->m_data = b->l_data + (n - b->core.n_cigar) * 4;
+            kroundup32(b->m_data);
+            b->data = (uint8_t*)realloc(b->data, b->m_data);
+        }
+        memmove(b->data + b->core.l_qname + n * 4, b->data + o, b->l_data - o);
+        memcpy(b->data + b->core.l_qname, cigar, n * 4);
+        b->l_data += (n - b->core.n_cigar) * 4;
+        b->core.n_cigar = n;
+    } else memcpy(b->data + b->core.l_qname, cigar, n * 4);
 }
 
-// seq2cigar based on the old haplotypes() output
-void seq2cigar_h2(dgraph_t *g, char *seq, int len, char *name) {
-    int i;
-    node_t *n = NULL, *last = NULL;
-    int cig_op = 0, cig_len = 0;
-
-    if (!len)
-	len = strlen(seq);
-
-    // First node
-    printf("len=%d-%d\n", len,g->kmer);
-    for (i = 0; i < len-g->kmer; i++) {
-	if ((n = find_node(g, seq+i, g->kmer, 0)) && (n->posa && n->posa[0] >= 0) || n->pos >= 0 && n->pruned == 0)
-	    break;
-	fprintf(stderr, "Didn't find %.*s; pos %d, prune %d\n", g->kmer, seq+i,
-		n && n->posa ? n->posa[0] : -999, n ? n->pruned : -999);
-    }
-
-    if (!n) {
-	fprintf(stderr, "No match found for seq\n");
-	return;
-    }
-
-    int pos = 0, j, padded = 0;
-
-    printf("%s\t0\t10\t", name);
-
-    {
-	int j;
-	fprintf(stderr, "\n%.*s", g->kmer, seq+i);
-	//int *posa = n->posa - (g->kmer-1);
-	int *posa = n->posa;
-	for (j = 0; j < g->kmer; j++) {
-	    fprintf(stderr, " %d", posa[j]);
-	}
-	fprintf(stderr, "  --- %d\n", posa[0]);
-    }
-
-    if (n->posa) {
-	int *posa = n->posa;
-	for (j = 0; j < g->kmer; j++) {
-	    if (posa[j] >= 0) {
-		pos = posa[j];
-		break;
-	    }
-	}
-	//printf("%d\t0\t", pos+POS_SHIFT);
-	//pos--;
-
-	if (i) {
-	    fprintf(stderr, "resolve unaligned prefix\n");
-	    // Extend the alignment back up the graph via a greedy approach.
-	    // This reduces the soft-clip size for regions of high error rate.
-
-	    // FIXME: we may want to create back-edges to avoid lots of hash
-	    // table lookups.
-	    int best_count = 0;
-	    node_t *h = n, *best_h, *last_h;
-	    int ib = i;
-	    int score = 0, best_score = 0, best_i = i;
-	    char prefix[1024];
-	    memcpy(prefix, seq, i+g->kmer>1024?1024:i+g->kmer);
-
-	    while (ib < 1024-g->kmer && ib >= 1) {
-		last_h = h;
-		int last_id = last_h->id;
-		ib--;
-		best_h = NULL;
-		if ((h = find_node(g, prefix+ib, g->kmer, 0)) &&
-		    h->pos >= -99999 && h->pruned == 0) {
-		    best_h = h;
-		    score++;
-		} else {
-		    int best_j = 0;
-		    int best_count = 0;
-		    char orig = prefix[ib];
-		    for (j = 0; j < 4; j++) {
-			prefix[ib] = "ACGT"[j];
-			if ((h = find_node(g, prefix+ib, g->kmer, 0)) &&
-			    h->pos >= -99999 && h->pruned == 0) {
-			    // check this node links to the one we were from
-			    int k;
-			    for (k = 0; k < h->n_out; k++)
-				if (h->out[k]->n[1] == last_id)
-				    break;
-			    if (k == h->n_out)
-				continue;
-
-			    score-=4;
-			    if (best_count < h->out[k]->count) {
-				best_count = h->out[k]->count;
-				best_h = h;
-				best_j = j;
-			    }
-			}
-			prefix[ib] = "ACGT"[best_j];
-		    }
-		}
-
-		if (best_score < score) {
-		    best_score = score;
-		    best_i = ib;
-		}
-
-		h = best_h;
-		if (!h)
-		    break;
-	    }
-
-	    if (best_i < i && 0) {
-		printf("%d\t0\t", pos-(i-best_i)+POS_SHIFT);
-		if (best_i > 0)
-		    ADD_CIGAR('S', best_i);
-		ADD_CIGAR('M', i - best_i);
-	    } else {
-		printf("%d\t0\t", pos+POS_SHIFT);
-		ADD_CIGAR('S', i);
-	    }
-	} else {
-	    printf("%d\t0\t", pos+POS_SHIFT);
-	}
-
-	pos--;
-	for (j = 0; j < g->kmer-1; j++) {
-	    fprintf(stderr, ">%d %d< ", posa[j], pos+1);
-	    if (posa[j] == pos+1) {
-		fprintf(stderr, "1M\n");
-		ADD_CIGAR('M', 1);
-		pos++;
-	    } else if (posa[j] > pos+1) {
-		fprintf(stderr, "%dD\n", posa[j] - (pos+1));
-		ADD_CIGAR('D', posa[j] - (pos+1));
-		pos = posa[j]+1;
-	    } else if (posa[j] <= -1 && posa[j] != INT_MIN) {
-		if (-posa[j] - 1 > 0 && !padded) {
-		    fprintf(stderr, "%dP\n", -posa[j]-1);
-		    ADD_CIGAR('P', -posa[j] - 1);
-		}
-		padded = 1;
-		fprintf(stderr, "1I\n");
-		ADD_CIGAR('I',1);
-	    } else {
-		putchar('?'); // FIXME:
-	    }
-	}
-    } else {
-	pos = n->pos; // FIXME: just leave these seqs in original pos.
-	printf("%d\t0\t",pos+POS_SHIFT);
-	ADD_CIGAR('X', i+g->kmer);
-	i = len;
-    }
-
-    // Trace path for each successive node.
-    for (; i <= len-g->kmer; i++) {
-	last = n;
-	if (!(n = find_node(g, seq+i, g->kmer, 0)) || n->pruned) {
-	    fprintf(stderr, "Failed to find node %.*s\n", g->kmer, seq+i);
-	    break;
-	}
-
-	if (n->posa) { // debug only
-	    int j;
-	    fprintf(stderr, "%.*s", g->kmer, seq+i);
-	    int *posa = n->posa;
-	    for (j = 0; j < g->kmer; j++) {
-		fprintf(stderr, " %d", posa[j]);
-	    }
-	    fprintf(stderr, "\n");
-	}
-
-	if (n->pos == pos+1) {
-	    // basic match
-	    ADD_CIGAR('M', 1);
-	    pos++;
-	} else if (n->pos > pos+1) {
-	    // skipping a beat; deletions
-	    ADD_CIGAR('D', n->pos - (pos+1));
-	    ADD_CIGAR('M', 1); // Is this correct?  Not in multiple alignment?
-	    pos = n->pos;
-	} else if (n->pos <= -1 && n->pos != INT_MIN) {
-	    // An unmapped base in reference; insertion, but possibly
-	    // also a node prior to this that we didn't observe in our
-	    // kmer stepping? (ie deletion)
-
-	    // bubble up to check if D or P before I
-	    node_t *np = NULL, *nn = n;
-	    int path[MAX_KMER] = {0}, path_ind = 0;
-	    for (;last && last != np; nn=np) {
-		np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
-		if (!np)
-		    break;
-		
-		// Track path of which out[x] leads from last to n.
-		int i;
-		for (i = 0; i < np->n_out; i++)
-		    if (np->out[i]->n[1] == nn->id)
-			break;
-		path[path_ind++] = i;
-	    }
-
-	    // Now replay the path in order from last->n
-	    np = last;
-	    if (--path_ind > 0)
-		np = g->node[np->out[path[path_ind]]->n[1]];
-	    while (--path_ind >= 0) {
-		//printf("Path %d\n", np->out[path[path_ind]]->n[1]);
-		if (np->pos >= 0) {
-		    ADD_CIGAR('D', 1);
-		    pos = np->pos;
-		} else {
-		    ADD_CIGAR('P', 1);
-		}
-		np = g->node[np->out[path[path_ind]]->n[1]];
-	    }
-	    
-	    //	    if (-n->pos - 1 > 0 && !padded)
-	    //		ADD_CIGAR('P', -n->pos - 1);
-	    //	    padded = 1;
-	    ADD_CIGAR('I', 1);
-	} else {
-	    // soft clip from here on.
-	    // OR... an internal mismatch that was pruned.
-	    // We need to realign pruned reads back to the graph?
-	    break;
-	}
-    }
-
-    // Trawl forward from last node with a greedy scoring algorithm
-    // to see if our potential soft-clip can be aligned further.
-    if (i <= len-g->kmer) {
-	n = last;
-	int score = 0, best_score = 0, best_i = i;
-	int old_i = i;
-	while (n && 0) {
-	    char base = seq[i+g->kmer-1];
-	    int j;
-	    int best_j = 0, best_count = 0;
-	    for (j = 0; j < n->n_out; j++) {
-		node_t *t = g->node[n->out[j]->n[1]];
-		// FIXME: try multiple hash keys if n->n_hi != 1
-		if (t->hi[0]->key[g->kmer-1] == base && !t->pruned)
-		    best_j = j, best_count = INT_MAX;
-		else if (best_count < n->out[j]->count && !t->pruned)
-		    best_j = j, best_count = n->out[j]->count;
-	    }
-	    score += (best_count == INT_MAX)
-		? +1
-		: -5;
-	    i++;
-	    if (best_score < score) {
-		best_score = score;
-		best_i = i;
-	    }
-	    n = n->n_out ? g->node[n->out[best_j]->n[1]] : NULL;
-	}
-
-	if (best_score)
-	    fprintf(stderr, "Extend by %d, score %d\n", best_i - old_i, best_score);
-
-	if (best_score > 0)
-	    ADD_CIGAR('M', best_i - old_i);
-	if (best_i <= len-g->kmer)
-	    ADD_CIGAR('S', len-g->kmer+1 -best_i);
-    }
-
-    ADD_CIGAR(0, 0); // flush
-    printf("\t*\t0\t0\t%.*s\t*\n", len, seq);
-}
 
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
-void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
+int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
     int i;
     node_t *n, *last = NULL;
-    int cig_op = 0, cig_len = 0;
+    int cig_op = 999, cig_len = 0;
     int first_go = 1;
     int seq_start = 0;
     char *orig_seq = seq;
-
-    if (!len)
-	len = strlen(seq);
+    int len = strlen(seq);
 
     char *sub = malloc(g->kmer + len + 1), *sub_k = sub + g->kmer;
     memcpy(sub_k, seq, len);
     sub_k[len] = 0;
+
+    int cig_a[MAX_CIGAR];
+    int cig_ind = 0;
 
     //printf("Orig seq = %.*s\n", len, seq);
 
@@ -2299,13 +1825,10 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	}
 
 
-	printf("%s\t0\t10\t", name);
-	printf("%d\t0\t", pos+POS_SHIFT);
 	// Start of read is unaligned.  Align back to ref or just soft-clip.
+	b->core.pos = pos+shift;
 	if (i + g->kmer-1 > 0)
-	    ADD_CIGAR('S', i + g->kmer-1);
-
-	//ADD_CIGAR('M', g->kmer-1);
+	    ADD_CIGAR(BAM_CSOFT_CLIP, i + g->kmer-1);
 
 	// Trace path for each successive node.
 	char *s1 = seq+i;
@@ -2321,11 +1844,11 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 		break;
 
 	    if (n->pos == pos+1) {
-		ADD_CIGAR('M', 1);
+		ADD_CIGAR(BAM_CMATCH, 1);
 		pos++;
 	    } else if (n->pos > pos+1){
-		ADD_CIGAR('D', n->pos - (pos+1));
-		ADD_CIGAR('M', 1); // Is this correct?  Not in multiple alignment?
+		ADD_CIGAR(BAM_CDEL, n->pos - (pos+1));
+		ADD_CIGAR(BAM_CMATCH, 1); // Is this correct?  Not in multiple alignment?
 		pos = n->pos;
 		//} else if (n->pos <= -1 && n->pos != INT_MIN) {
 	    } else if (n->pos == INT_MIN) {
@@ -2359,10 +1882,10 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 		while (--path_ind >= 0) {
 		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
 		    if (np->pos >= 0) {
-			ADD_CIGAR('D', 1);
+			ADD_CIGAR(BAM_CDEL, 1);
 			pos = np->pos;
 		    } else {
-			ADD_CIGAR('P', 1);
+			ADD_CIGAR(BAM_CPAD, 1);
 		    }
 		    if (path[path_ind] >= np->n_out)
 			goto fail; // under what scenario does this happen?
@@ -2370,9 +1893,9 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 		}
 	    
 		//	    if (-n->pos - 1 > 0 && !padded)
-		//		ADD_CIGAR('P', -n->pos - 1);
+		//		ADD_CIGAR(BAM_CPAD, -n->pos - 1);
 		//	    padded = 1;
-		ADD_CIGAR('I', 1);
+		ADD_CIGAR(BAM_CINS, 1);
 		// FIXME: mismatches at the end need to be soft-clips and
 		// not insertions.  See eg4c.{dat,ref}
 		//
@@ -2388,25 +1911,25 @@ void seq2cigar_new(dgraph_t *g, char *ref, char *seq, int len, char *name) {
 	    }
 	}
 
-	if (cig_op == 'I')
-	    cig_op = 'S';
+	if (cig_op == BAM_CINS)
+	    cig_op = BAM_CSOFT_CLIP;
 
     fail:
 	if (i+g->kmer-1 < len) {
 	    // trailing unaligned. FIXME: align it or soft-clip as appropriate.
-	    ADD_CIGAR('S', len-(i+g->kmer-1));
+	    ADD_CIGAR(BAM_CSOFT_CLIP, len-(i+g->kmer-1));
 	}
 
-	ADD_CIGAR(0, 0); // flush
+	ADD_CIGAR(999, 0); // flush
     } else {
 	// Unmapped
-	printf("%s\t0\t10\t", name);
-	printf("%d\t0\t*", pos+POS_SHIFT);
+	b->core.flag |= BAM_FUNMAP;
     }
 
-    printf("\t*\t0\t0\t%.*s\t*\n", len, orig_seq);
-
+    replace_cigar(b, cig_ind, cig_a);
+    
     free(sub);
+    return 0;
 }
 
 int int64_compar(const void *vp1, const void *vp2) {
@@ -2497,42 +2020,14 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
     return h;
 }
 
-int haplotypes(dgraph_t *g, haps_t *ref) {
-    int i, nh;
-    hseqs *h;
-    for (i = 0; i < g->nnodes; i++) {
-	if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
-	    nh = 0;
-	    h = follow_graph(g, i, NULL, NULL, 0, NULL, &nh);
-
-	    hseqs *h2, *hn;
-	    int j;
-
-	    // FIXME: we should do this in match score order.
-	    for (j = 0, h2 = h; h2; h2 = hn, j++) {
-		//printf("H%03d = '%.*s'\n", j, h2->len, h2->seq);
-
-		int score;
-		int S[10000]; // fixme
-		score = align_ss(ref->seq, h2->seq, strlen(ref->seq), h2->len,
-				 0, 0, X128, 8, 1, S, 1,1,1,1);
-		printf("Score=%d\n", score);
-		display_ss(ref->seq, h2->seq, strlen(ref->seq), h2->len, S, 0, 0);
-
-		pad_ref_hap(g, h2, ref, S);
-		
-		hn = h2->next;
-		free(h2->seq);
-		free(h2->seq2);
-	    }
-	}
-    }
-}
-
 #ifndef ERRK
 #define ERRK 30
 #endif
 
+// FIXME: min_count needs to be depth based.  Find mean count and
+// use this to cap min_count?  So low coverage would reduce,
+// min_count, but high coverage or lots of low complexity data won't
+// increase it.
 int correct_errors(haps_t *h, int n, int min_count) {
     HashTable *hash, *neighbours;
     HashItem *hi;
@@ -2827,7 +2322,7 @@ haps_t *load_fasta(char *fn, int *nhaps) {
 // Basic load function to read an entire BAM file.
 // This is just a test for small subsets, rather than streaming
 // a large file.
-bam1_t *load_bam(char *fn, int *nrecs) {
+bam1_t *load_bam(char *fn, int *nrecs, bam_hdr_t **hdr_p) {
     samFile *in = sam_open(fn, "r");
     bam_hdr_t *hdr;
     int nalloc = 128, nr = 0;
@@ -2836,7 +2331,7 @@ bam1_t *load_bam(char *fn, int *nrecs) {
     if (!in)
 	return NULL;
 
-    if (!(hdr = sam_hdr_read(in)))
+    if (!(*hdr_p = hdr = sam_hdr_read(in)))
 	return NULL;
 
     while (sam_read1(in, hdr, &bams[nr]) >= 0) {
@@ -2852,6 +2347,31 @@ bam1_t *load_bam(char *fn, int *nrecs) {
     return bams;
 }
 
+haps_t *bam2haps(bam1_t *bams, int nrecs) {
+    int i;
+    haps_t *haps = malloc(sizeof(*haps) * nrecs);
+    if (!haps)
+	return NULL;
+
+    for (i = 0; i < nrecs; i++) {
+	bam1_t *b = &bams[i];
+	uint8_t *seq = bam_get_seq(b);
+	int j;
+
+	haps[i].pos  = 0;
+	haps[i].name = bam_get_qname(b);
+	haps[i].seq  = malloc(b->core.l_qseq+1);
+	if (!haps[i].seq)
+	    return NULL; // leak on failure
+
+	for (j = 0; j < b->core.l_qseq; j++)
+	    haps[i].seq[j] = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, j)];
+	haps[i].seq[b->core.l_qseq] = 0;
+    }
+
+    return haps;
+}
+
 int main(int argc, char **argv) {
     int i, kmer = KMER;
     dgraph_t *g;
@@ -2861,14 +2381,19 @@ int main(int argc, char **argv) {
     init_W128_score(-4,1);
     init_X128_score(-4,4);
 
-//    int nrecs;
-//    bam1_t *bams = load_bam(argv[1], &nrecs);
-//    fprintf(stderr, "Loaded %d BAM records\n", nrecs);
+    bam_hdr_t *hdr;
+    bam1_t *bams = load_bam(argv[1], &nhaps, &hdr);
+    fprintf(stderr, "Loaded %d BAM records\n", nhaps);
 
-    fprintf(stderr, "Loading\n");
-    haps = load_fasta(argv[1], &nhaps);
+    // Convert BAMS to seqs instead, so we can perform edits on them
+    // while retaining the original data.
+    haps = bam2haps(bams, nhaps);
 
-    fix_seqs(haps, nhaps);
+//
+//    fprintf(stderr, "Loading\n");
+//    haps = load_fasta(argv[1], &nhaps);
+//
+//    fix_seqs(haps, nhaps);
 
     // Successive rounds allows for fixing more than 1 error in a read.
     fprintf(stderr, "Correcting\n");
@@ -2905,6 +2430,8 @@ int main(int argc, char **argv) {
 
     graph2dot(g, "f.dot", 0);
 
+    int shift = bams[0].core.pos+1;
+
     haps_t *ref = NULL;
     if (argc > 2) {
 	fprintf(stderr, "===> Adding reference\n");
@@ -2915,6 +2442,8 @@ int main(int argc, char **argv) {
 	memmove(ref->seq + g->kmer-1, ref->seq, ref_len);
 	memset(ref->seq, 'N', g->kmer-1);
 	add_seq(g, ref->seq, 0, 1);
+
+	shift = atoi(ref->name); // ref start, not bam start.  
     }
 
     graph2dot(g, "F.dot", 0);
@@ -2952,30 +2481,25 @@ int main(int argc, char **argv) {
     //fprintf(stderr, "Pruning\n");
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);
 
+    for (i = 0; i < nhaps; i++) {
+        if (seq2cigar_new(g, ref->seq, shift, &bams[i], haps[i].seq) < 0)
+	    return 1;
+    }
 
-    // FIXME: haplotypes() collapses to one hap and then running pad_ref_hap
-    // to align and get coords.  This works mostly, but the haplotype consensus
-    // can sometimes have kmers not present in real reads (multiple neighbouring SNPs)
-    // and hence fails to map all coords.
-    //
-    // Slower but better is to convert each seq in turn using its own kmers.
-    // Ie see seq2cigar_new (ongoing).
-#if 0
-    fprintf(stderr, "Computing haplotypes\n");
-    if (ref)
-	haplotypes(g, ref);
+    // FIXME/TODO: sort output
 
-    graph2dot(g, "h.dot", 0);
+    samFile *fp;
+    if (!(fp = sam_open("-", "w")))
+	return 1;
+    if (sam_hdr_write(fp, hdr) < 0)
+	return 1;
+    for (i = 0; i < nhaps; i++) {
+	if (sam_write1(fp, hdr, &bams[i]) < 0)
+	    return 1;
+    }
+    if (sam_close(fp) < 0)
+	return 1;
 
-    printf("@HD\tVN:1.5\n@SQ\tSN:10\tLN:135352707\n");
-    for (i = 0; i < nhaps; i++)
-	seq2cigar_h2(g, haps[i].seq, 0, haps[i].name);
-#else
-    printf("@HD\tVN:1.5\n@SQ\tSN:10\tLN:135352707\n");
-    for (i = 0; i < nhaps; i++)
-        seq2cigar_new(g, ref->seq, haps[i].seq, 0, haps[i].name);
-#endif
-    
     graph_destroy(g);
 
     fprintf(stderr, "Finished.\n");
