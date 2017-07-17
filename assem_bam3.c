@@ -1354,6 +1354,9 @@ void find_insertions(dgraph_t *g) {
 	    n = g->node[n->out[j]->n[1]];
 	}
 
+	if (n->pos == INT_MIN)
+	    continue;
+
 	int pass, ins_count = 0, end_pos;
 	for (pass = 0; pass < 2; pass++) {
 	    node_t *nr_1 = n;    // last-ref and 1st-insertion
@@ -1977,12 +1980,14 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	    if (n->pos == pos+1 && n->ins == 0) {
 		ADD_CIGAR(BAM_CMATCH, 1);
 		pos++;
+		last_ins = 1;
 	    } else if (n->pos > pos+1){
 		ADD_CIGAR(BAM_CDEL, n->pos - (pos+1));
 		ADD_CIGAR(BAM_CMATCH, 1); // Is this correct?  Not in multiple alignment?
 		pos = n->pos;
+		last_ins = 1;
 		//} else if (n->pos <= -1 && n->pos != INT_MIN) {
-	    } else if (n->pos == INT_MIN || n->pos == pos+1) {
+	    } else if (n->pos == pos+1 && n->ins) {
 		// An unmapped base in reference; insertion, but possibly
 		// also a node prior to this that we didn't observe in our
 		// kmer stepping? (ie deletion)
@@ -1990,51 +1995,9 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 		// bubble up to check if D or P before I
 		node_t *np = NULL, *nn = n;
 		int path[MAX_SEQ] = {0}, path_ind = 0;
-		if (n->ins) {
-		    if (n->ins > last_ins+1)
-			ADD_CIGAR(BAM_CPAD, n->ins - last_ins);
-		} else {
-		    // Recheck all of this.
-		    // It dates back to before we added 2D coordinates of
-		    // Nth base inserted at Mth ref pos.
-		    for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
-			np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
-			if (!np)
-			    break;
-		
-			// Track path of which out[x] leads from last to n.
-			int i;
-			for (i = 0; i < np->n_out; i++)
-			    if (np->out[i]->n[1] == nn->id)
-				break;
-			path[path_ind++] = i;
-		    }
-
-		    if (path_ind == MAX_SEQ)
-			goto fail;
-
-		    // Now replay the path in order from last->n
-		    np = last;
-		    if (--path_ind > 0)
-			np = g->node[np->out[path[path_ind]]->n[1]];
-		    while (--path_ind >= 0) {
-			//printf("Path %d\n", np->out[path[path_ind]]->n[1]);
-			if (np->pos >= 0 && !np->ins) {
-			    ADD_CIGAR(BAM_CDEL, 1);
-			    pos = np->pos;
-			} else {
-			    ADD_CIGAR(BAM_CPAD, 1);
-			}
-			if (path[path_ind] >= np->n_out)
-			    goto fail; // under what scenario does this happen?
-			np = g->node[np->out[path[path_ind]]->n[1]];
-		    }
-		}
-
+		if (n->ins > last_ins+1)
+		    ADD_CIGAR(BAM_CPAD, n->ins - last_ins);
 	    
-		//	    if (-n->pos - 1 > 0 && !padded)
-		//		ADD_CIGAR(BAM_CPAD, -n->pos - 1);
-		//	    padded = 1;
 		ADD_CIGAR(BAM_CINS, 1);
 		last_ins = n->ins;
 		// FIXME: mismatches at the end need to be soft-clips and
@@ -2044,6 +2007,51 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 		// the main branch and become matches as far as they can.
 		// (Needed for long kmers.)
 
+	    } else if (n->pos == INT_MIN) {
+		// An unmapped base in reference; insertion, but possibly
+		// also a node prior to this that we didn't observe in our
+		// kmer stepping? (ie deletion)
+
+		// bubble up to check if D or P before I
+		node_t *np = NULL, *nn = n;
+		int path[MAX_SEQ] = {0}, path_ind = 0;
+		// Recheck all of this.
+		// It dates back to before we added 2D coordinates of
+		// Nth base inserted at Mth ref pos.
+		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
+		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
+		    if (!np)
+			break;
+		
+		    // Track path of which out[x] leads from last to n.
+		    int i;
+		    for (i = 0; i < np->n_out; i++)
+			if (np->out[i]->n[1] == nn->id)
+			    break;
+		    path[path_ind++] = i;
+		}
+
+		if (path_ind == MAX_SEQ)
+		    goto fail;
+
+		// Now replay the path in order from last->n
+		np = last;
+		if (--path_ind > 0)
+		    np = g->node[np->out[path[path_ind]]->n[1]];
+		while (--path_ind >= 0) {
+		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
+		    if (np->pos >= 0 && !np->ins) {
+			ADD_CIGAR(BAM_CDEL, 1);
+			pos = np->pos;
+		    } else {
+			ADD_CIGAR(BAM_CPAD, 1);
+		    }
+		    if (path[path_ind] >= np->n_out)
+			goto fail; // under what scenario does this happen?
+		    np = g->node[np->out[path[path_ind]]->n[1]];
+		}
+
+		ADD_CIGAR(BAM_CINS, 1);
 	    } else {
 		// soft clip from here on.
 		// OR... an internal mismatch that was pruned.
@@ -2052,8 +2060,20 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	    }
 	}
 
-	if (cig_op == BAM_CINS && n->ins == 0)
-	    cig_op = BAM_CSOFT_CLIP;
+	if (cig_op == BAM_CINS && n->ins == 0) {
+	    // partial match to known insertion plus partial mismatch => softclip?
+	    //
+	    // Eg should be 5M 10I, but want 5M 8I 2S due to seq error
+	    // in 2nd to last base.
+	    if (last_ins > 1 && last_ins < cig_len) {
+		int sc_len = cig_len - last_ins;
+		cig_len = last_ins;
+		ADD_CIGAR(BAM_CSOFT_CLIP, sc_len);
+	    } else if (last_ins <= 1) {
+		cig_op = BAM_CSOFT_CLIP;
+	    }
+	    //fprintf(stderr, "%d,%d: ins at %d, last %d, last_ins %d\n", n->id, last->id, n->ins, last->ins, last_ins);
+	}
 
     fail:
 	if (i+g->kmer-1 < len) {
