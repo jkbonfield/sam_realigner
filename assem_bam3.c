@@ -1,5 +1,3 @@
-// As per assem_bam3.c but accepts SAM/BAM as input and keeps all
-// fields present in output.
 // cc -g -I$HOME/work/samtools_master/htslib assem_bam.c hash_table.c pooled_alloc.c string_alloc.c align_ss.c -DKMER=70 -lm -L$HOME/work/samtools_master/htslib -lhts -lz -pthread
 
 // ./a.out a.fasta ref.fasta > a.sam && sfdp -Gstart=24 -Gmaxiter=10 -GK=.5 -Gsplines=true -Efontsize=24 -Nshape=point  g.dot -Tpdf -o g.pdf; evince g.pdf
@@ -46,6 +44,9 @@ appropriate location within the string.
 
 #include "htslib/sam.h"
 #include "htslib/kstring.h"
+
+#define IS_REF 1
+#define IS_CON 2
 
 //---------------------------------------------------------------------------
 
@@ -139,8 +140,8 @@ int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
     
     int score = align_ss(seq1, seq2, len1, len2, 0,0, X128, G,H, S, s1,s2,e1,e2);
 
-    printf("Score=%d\n", score);
-    display_ss(seq1, seq2, len1, len2, S, 0, 0);
+//    printf("Score=%d\n", score);
+//    display_ss(seq1, seq2, len1, len2, S, 0, 0);
 
     free(seq1);
     free(seq2);
@@ -191,6 +192,7 @@ typedef struct node_t {
     // True if node is part of the reference
     int ref;
     int pos;
+    int ins; // Nth base of an insertion between two mapped pos.
     int *posa; // points to an array of positions
 
     // Path tracking for breadth first search.
@@ -552,7 +554,7 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
     if (!len)
 	len = strlen(seq);
 
-    if (!ref) {
+    if (!(ref & IS_REF)) {
 	// Prune trailing Ns.
 	while (*seq == 'N' && len > 0)
 	    seq++, len--;
@@ -587,12 +589,14 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 	    node_t *n2 = g->node[e->n[1]];
 	    // FIXME: detect possible loops here. Ref must be a clean pass through!
 	    //n1->pos = i+g->kmer-1;
-	    n1->pos = i;
-	    n1->ref = 1;
+	    if (ref & IS_REF)
+		n1->pos = i;
+	    n1->ref |= ref;
 	    
 	    //n2->pos = i+g->kmer;
-	    n2->pos = i+1;
-	    n2->ref = 1;
+	    if (ref & IS_REF)
+		n2->pos = i+1;
+	    n2->ref |= ref;
 	}
     }
 
@@ -605,11 +609,11 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 int ref_edge(dgraph_t *g, edge_t *e) {
     node_t *n1 = g->node[e->n[0]];
     node_t *n2 = g->node[e->n[0]];
-    return n1->ref || n2->ref;
+    return (n1->ref & IS_REF) || (n2->ref & IS_REF);
 }
 
 int ref_node(dgraph_t *g, int id) {
-    return g->node[id]->ref;
+    return g->node[id]->ref & IS_REF;
 }
 
 // Returns the best previous node, scored by incoming edge count
@@ -707,9 +711,9 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     node_t **path2 = malloc(g->nnodes * sizeof(node_t *));
     int np1 = 0, np2 = 0, i, j;
 
-    printf("Node_common_ancestor %d<-%d %d<-%d\n",
-	   n_end->id, p1->id,
-	   n_end->id, p2->id);
+//    printf("Node_common_ancestor %d<-%d %d<-%d\n",
+//	   n_end->id, p1->id,
+//	   n_end->id, p2->id);
 
     // Backtrack up p1 marking set.
     node_t *n = p1;
@@ -750,22 +754,22 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     }
     
 
-    // Report
-    n = p1;
-    printf(" => path 1: ");
-    while (n && n->id != start) {
-	printf(" %d", n->id);
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
-    }
-    printf(" %d, len=%d\n", start, np1);
-
-    n = p2;
-    printf(" => path 2: ");
-    while (n && n->id != start) {
-	printf(" %d", n->id);
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
-    }
-    printf(" %d, len=%d\n", start, np2);
+//    // Report
+//    n = p1;
+//    printf(" => path 1: ");
+//    while (n && n->id != start) {
+//	printf(" %d", n->id);
+//	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+//    }
+//    printf(" %d, len=%d\n", start, np1);
+//
+//    n = p2;
+//    printf(" => path 2: ");
+//    while (n && n->id != start) {
+//	printf(" %d", n->id);
+//	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+//    }
+//    printf(" %d, len=%d\n", start, np2);
 
     // Align vectors.
     // FIXME: These should be n->bases[][] * n->count?
@@ -1180,7 +1184,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 	    if (n->n_out > 1) {
 		for (i = 1; i < n->n_out; i++) {
 		    if (!use_ref && n->out[i]->count == 1 &&
-			n->ref == 1 && g->node[n->out[i]->n[1]]->ref == 1) {
+			(n->ref & IS_REF) && (g->node[n->out[i]->n[1]]->ref & IS_REF)) {
 			//printf("Skipping ref edge %d to %d\n", n->id, n->out[i]->n[1]);
 			continue;
 		    }
@@ -1284,8 +1288,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 }
 
 void find_bubbles(dgraph_t *g, int use_ref) {
-    int i, level = 0;
-    int found;
+    int i, found;
 
     do {
 	found = 0;
@@ -1295,6 +1298,7 @@ void find_bubbles(dgraph_t *g, int use_ref) {
 
 	for (i = 0; i < g->nnodes; i++) {
 	    int j;
+	    // Needed?
 	    for (j = 0; j < g->nnodes; j++)
 		g->node[j]->visited = 0;
 
@@ -1306,6 +1310,97 @@ void find_bubbles(dgraph_t *g, int use_ref) {
 	    }
 	}
     } while (found);
+}
+
+// Should be run on a collapsed graph without bubbles.
+// Any forks should only have one route that follows the reference.
+void find_insertions(dgraph_t *g) {
+    int i, j;
+
+    // Find ref boundaries
+    int r_min = INT_MAX, r_max = INT_MIN;
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned || n->pos == INT_MIN)
+	    continue;
+	if (r_min > n->pos)
+	    r_min = n->pos;
+	if (r_max < n->pos)
+	    r_max = n->pos;
+    }
+    if (r_min == INT_MAX)
+	return;
+
+    fprintf(stderr, "Ref covered %d to %d\n", r_min, r_max);
+
+    for (i = 0; i < g->nnodes; i++)
+	g->node[i]->visited = 0;
+
+    for (i = 0; i < g->nnodes; i++) {
+	if (/*g->node[i]->n_in != 0 ||*/ g->node[i]->pruned || g->node[i]->visited)
+	    continue;
+
+	// Found a starting point, so scan forward from here.
+	node_t *n = g->node[i];
+	while (n && n->pos != INT_MIN) {
+	    n->visited = 1;
+	    for (j = 0; j < n->n_out; j++) {
+		if (g->node[n->out[j]->n[1]]->pos != INT_MIN)
+		    break;
+	    }
+	    if (j == n->n_out)
+		break;
+
+	    n = g->node[n->out[j]->n[1]];
+	}
+
+	int pass, ins_count = 0, end_pos;
+	for (pass = 0; pass < 2; pass++) {
+	    node_t *nr_1 = n;    // last-ref and 1st-insertion
+	    node_t *ni_1 = NULL;
+	    for (j = 0; j < n->n_out; j++) {
+		node_t *t = g->node[n->out[j]->n[1]];
+		if (t->ref & IS_CON)
+		    ni_1 = t;
+	    }
+
+	    if (!ni_1)
+		continue;
+
+	    // Find the other end of the insertion, if it exists
+	    node_t *ni_2 = ni_1, *nr_2 = NULL;
+	    do {
+		if (ni_2->visited)
+		    break;
+
+		if (pass > 0) {
+		    ni_2->ins = ++ins_count;
+		    ni_2->pos = end_pos;
+		}
+
+		node_t *tmp = NULL;
+		for (j = 0; j < ni_2->n_out; j++) {
+		    node_t *t = g->node[ni_2->out[j]->n[1]];
+		    if (t->pos != INT_MIN) {
+			nr_2 = t;
+			break;
+		    } else if ((t->ref & IS_CON) || !n) {
+			tmp = t;
+		    }
+		}
+		if (nr_2)
+		    break;
+		ni_2 = tmp;
+	    } while (ni_2);
+
+	    if (!nr_2)
+		continue;
+
+	    fprintf(stderr, "ins from %d(%d) to (%d)%d\n",
+		    nr_1->id, ni_1->id, ni_2->id, nr_2->id);
+	    end_pos = nr_2->pos;
+	}
+    }
 }
 
 
@@ -1536,6 +1631,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 //		n->id);
 
 	fprintf(fp, "  n_%d [label=\"%d @ %d", n->id, n->id, n->pos);
+	if (n->ins) fprintf(fp, ".%d", n->ins);
 	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
 	if (n->posa) {
 	    for (j = 0; j < g->kmer; j++) {
@@ -1754,6 +1850,8 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 
     //printf("Orig seq = %.*s\n", len, seq);
 
+    int last_ins = 1;
+    int since_mat = 0;
  try_again:
     // First node
     for (i = seq_start; i < len-g->kmer; i++) {
@@ -1763,13 +1861,44 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 
     if (!n) {
 	fprintf(stderr, "No match found for seq\n");
-	return;
+	goto unmapped;
     }
+
+//    if (n->pos < 0) {
+//	// No mapped kmer, so start with the first unmapped one instead
+//	for (i = seq_start; i < len-g->kmer; i++) {
+//	    if ((n = find_node(g, seq+i, g->kmer, 0)) && n->pruned == 0)
+//		break;
+//	}
+//	if (n->pruned) {
+//	    goto unmapped;
+//	}
+//    }
 
     int pos = 0, j, padded = 0;
 
-    if (n->pos >= 0) {
-	pos = n->pos-1;
+    if (n->pos >= 0 /*&& (first_go || n->ins == 0)*/ /*|| (n->ref & IS_CON)*/) {
+//	int np_dist = 0;
+//	if (n->pos < 0) {
+//	    // last base of 1st kmer is in an insertion.  Backtrack to see
+//	    // if the sequence keeps matching the consensus (todo - we need
+//	    // to check the actual sequence does!).
+//	    node_t *np = n;
+//	    while (np->n_in > 0 /*&& np->pos < 0*/ && (np->ref & IS_CON)) {
+//		np = g->node[np->in[0]->n[1]];
+//		np_dist++;
+//	    }
+//
+//	    // Did we come out of the insertion and into data mapped to a ref?
+//	    // If so we have xMyI CIGAR.
+//	    if (np->pos > 0) {
+//		pos = np->pos-1;
+//		ADD_CIGAR(...
+//	    }
+//	    
+//	} else {
+	    pos = n->pos-1;
+//	}
 
 	if (first_go) {
 	    memset(sub, 'N', g->kmer);
@@ -1827,8 +1956,10 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 
 	// Start of read is unaligned.  Align back to ref or just soft-clip.
 	b->core.pos = pos+shift;
-	if (i + g->kmer-1 > 0)
-	    ADD_CIGAR(BAM_CSOFT_CLIP, i + g->kmer-1);
+	if (i + g->kmer-1 > 0) {
+	    int sc = i + g->kmer-1;
+	    ADD_CIGAR(BAM_CSOFT_CLIP, sc);
+	}
 
 	// Trace path for each successive node.
 	char *s1 = seq+i;
@@ -1843,7 +1974,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	    if (!(n = find_node(g, s1++, g->kmer, 0)) || n->pruned)
 		break;
 
-	    if (n->pos == pos+1) {
+	    if (n->pos == pos+1 && n->ins == 0) {
 		ADD_CIGAR(BAM_CMATCH, 1);
 		pos++;
 	    } else if (n->pos > pos+1){
@@ -1851,7 +1982,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 		ADD_CIGAR(BAM_CMATCH, 1); // Is this correct?  Not in multiple alignment?
 		pos = n->pos;
 		//} else if (n->pos <= -1 && n->pos != INT_MIN) {
-	    } else if (n->pos == INT_MIN) {
+	    } else if (n->pos == INT_MIN || n->pos == pos+1) {
 		// An unmapped base in reference; insertion, but possibly
 		// also a node prior to this that we didn't observe in our
 		// kmer stepping? (ie deletion)
@@ -1859,43 +1990,53 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 		// bubble up to check if D or P before I
 		node_t *np = NULL, *nn = n;
 		int path[MAX_SEQ] = {0}, path_ind = 0;
-		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
-		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
-		    if (!np)
-			break;
-		
-		    // Track path of which out[x] leads from last to n.
-		    int i;
-		    for (i = 0; i < np->n_out; i++)
-			if (np->out[i]->n[1] == nn->id)
+		if (n->ins) {
+		    if (n->ins > last_ins+1)
+			ADD_CIGAR(BAM_CPAD, n->ins - last_ins);
+		} else {
+		    // Recheck all of this.
+		    // It dates back to before we added 2D coordinates of
+		    // Nth base inserted at Mth ref pos.
+		    for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
+			np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
+			if (!np)
 			    break;
-		    path[path_ind++] = i;
-		}
-
-		if (path_ind == MAX_SEQ)
-		    goto fail;
-
-		// Now replay the path in order from last->n
-		np = last;
-		if (--path_ind > 0)
-		    np = g->node[np->out[path[path_ind]]->n[1]];
-		while (--path_ind >= 0) {
-		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
-		    if (np->pos >= 0) {
-			ADD_CIGAR(BAM_CDEL, 1);
-			pos = np->pos;
-		    } else {
-			ADD_CIGAR(BAM_CPAD, 1);
+		
+			// Track path of which out[x] leads from last to n.
+			int i;
+			for (i = 0; i < np->n_out; i++)
+			    if (np->out[i]->n[1] == nn->id)
+				break;
+			path[path_ind++] = i;
 		    }
-		    if (path[path_ind] >= np->n_out)
-			goto fail; // under what scenario does this happen?
-		    np = g->node[np->out[path[path_ind]]->n[1]];
+
+		    if (path_ind == MAX_SEQ)
+			goto fail;
+
+		    // Now replay the path in order from last->n
+		    np = last;
+		    if (--path_ind > 0)
+			np = g->node[np->out[path[path_ind]]->n[1]];
+		    while (--path_ind >= 0) {
+			//printf("Path %d\n", np->out[path[path_ind]]->n[1]);
+			if (np->pos >= 0 && !np->ins) {
+			    ADD_CIGAR(BAM_CDEL, 1);
+			    pos = np->pos;
+			} else {
+			    ADD_CIGAR(BAM_CPAD, 1);
+			}
+			if (path[path_ind] >= np->n_out)
+			    goto fail; // under what scenario does this happen?
+			np = g->node[np->out[path[path_ind]]->n[1]];
+		    }
 		}
+
 	    
 		//	    if (-n->pos - 1 > 0 && !padded)
 		//		ADD_CIGAR(BAM_CPAD, -n->pos - 1);
 		//	    padded = 1;
 		ADD_CIGAR(BAM_CINS, 1);
+		last_ins = n->ins;
 		// FIXME: mismatches at the end need to be soft-clips and
 		// not insertions.  See eg4c.{dat,ref}
 		//
@@ -1911,7 +2052,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	    }
 	}
 
-	if (cig_op == BAM_CINS)
+	if (cig_op == BAM_CINS && n->ins == 0)
 	    cig_op = BAM_CSOFT_CLIP;
 
     fail:
@@ -1922,6 +2063,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 
 	ADD_CIGAR(999, 0); // flush
     } else {
+    unmapped:
 	// Unmapped
 	b->core.flag |= BAM_FUNMAP;
     }
@@ -2441,7 +2583,7 @@ int main(int argc, char **argv) {
 	ref->seq[ref_len + g->kmer-1] = 0;
 	memmove(ref->seq + g->kmer-1, ref->seq, ref_len);
 	memset(ref->seq, 'N', g->kmer-1);
-	add_seq(g, ref->seq, 0, 1);
+	add_seq(g, ref->seq, 0, IS_REF);
 
 	shift = atoi(ref->name); // ref start, not bam start.  
     }
@@ -2453,8 +2595,8 @@ int main(int argc, char **argv) {
 
     graph2dot(g, "g.dot", 0);
 
-    haps_t *cons = compute_consensus(g);
-    add_seq(g, cons->seq, 0, ref?0:1);
+    haps_t *cons = compute_consensus(g); 
+    add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON); 
     if (!ref)
 	ref = cons;
 
@@ -2477,6 +2619,13 @@ int main(int argc, char **argv) {
 
     //tag_hairs(g);
     //collapse_bubbles(g);
+
+    // Strings of bases inserted between reference coords
+    // permit us to generate alignments starting or ending
+    // inside the insertions.
+    if (argc > 2) // we gave it a ref
+	find_insertions(g);
+    graph2dot(g, "I.dot", 0);
 
     //fprintf(stderr, "Pruning\n");
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);
