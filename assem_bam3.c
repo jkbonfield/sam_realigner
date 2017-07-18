@@ -1853,7 +1853,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 
     //printf("Orig seq = %.*s\n", len, seq);
 
-    int last_ins = 1;
+    int last_ins = 0;
     int since_mat = 0;
  try_again:
     // First node
@@ -1980,12 +1980,20 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	    if (n->pos == pos+1 && n->ins == 0) {
 		ADD_CIGAR(BAM_CMATCH, 1);
 		pos++;
-		last_ins = 1;
+		last_ins = 0;
 	    } else if (n->pos > pos+1){
 		ADD_CIGAR(BAM_CDEL, n->pos - (pos+1));
-		ADD_CIGAR(BAM_CMATCH, 1); // Is this correct?  Not in multiple alignment?
-		pos = n->pos;
-		last_ins = 1;
+		if (n->ins) {
+		    if (n->ins > 1)
+			ADD_CIGAR(BAM_CPAD, n->ins-1);
+		    ADD_CIGAR(BAM_CINS, 1);
+		    last_ins = n->ins;
+		    pos = n->pos-1;
+		} else {
+		    ADD_CIGAR(BAM_CMATCH, 1); // Is this correct?  Not in multiple alignment?
+		    last_ins = 0;
+		    pos = n->pos;
+		}
 		//} else if (n->pos <= -1 && n->pos != INT_MIN) {
 	    } else if (n->pos == pos+1 && n->ins) {
 		// An unmapped base in reference; insertion, but possibly
@@ -1996,7 +2004,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 		node_t *np = NULL, *nn = n;
 		int path[MAX_SEQ] = {0}, path_ind = 0;
 		if (n->ins > last_ins+1)
-		    ADD_CIGAR(BAM_CPAD, n->ins - last_ins);
+		    ADD_CIGAR(BAM_CPAD, n->ins - (last_ins+1));
 	    
 		ADD_CIGAR(BAM_CINS, 1);
 		last_ins = n->ins;
@@ -2061,6 +2069,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	}
 
 	if (cig_op == BAM_CINS && n->ins == 0) {
+	    fprintf(stderr, "ending on ins, n->ins=%d last_ins=%d cig_len=%d\n", n->ins, last_ins, cig_len);
 	    // partial match to known insertion plus partial mismatch => softclip?
 	    //
 	    // Eg should be 5M 10I, but want 5M 8I 2S due to seq error
@@ -2082,6 +2091,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	}
 
 	ADD_CIGAR(999, 0); // flush
+	b->core.flag &= ~BAM_FUNMAP;
     } else {
     unmapped:
 	// Unmapped

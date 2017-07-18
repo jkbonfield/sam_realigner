@@ -1,0 +1,10 @@
+@HD	VN:1.4	SO:coordinate
+@SQ	SN:x	LN:100
+a	0	x	1	40	6M	*	0	0	AGCTAT	*
+a	0	x	3	40	5M1I	*	0	0	CTATGA	*
+a	0	x	5	40	3M3I	*	0	0	ATGACG	*
+a	0	x	7	40	1M5I	*	0	0	GACGAT	*
+a	0	x	8	40	1P6I	*	0	0	CGATCA	*
+a	0	x	8	40	3P5I1M	*	0	0	ATCAGC	*
+a	0	x	8	40	5P3I3M	*	0	0	CAGCGT	*
+a	0	x	8	40	7P1I5M	*	0	0	GCGTAC	*

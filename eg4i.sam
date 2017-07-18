@@ -1,0 +1,12 @@
+@HD	VN:1.5
+@SQ	SN:10	LN:135352707
+a1	0	10	1	0	*	*	0	0	TGACTGCAACT	*
+a2	0	10	1	0	*	*	0	0	TGACTCAACT	*
+b1	0	10	1	0	*	*	0	0	GACTGCAAC	*
+b2	0	10	1	0	*	*	0	0	GACTCAAC	*
+c1	0	10	1	0	*	*	0	0	ACTGCAA	*
+c2	0	10	1	0	*	*	0	0	ACTCAA	*
+err1	0	10	1	0	*	*	0	0	TTTTGCAACT	*
+err2	0	10	1	0	*	*	0	0	TACTCAAC	*
+err3	0	10	1	0	*	*	0	0	TCTGCAA	*
+err4	0	10	1	0	*	*	0	0	TCTCAA	*

@@ -63,13 +63,14 @@ test18: KMER=18
 test18: assem_bam_k18 test_kmer18
 
 $(TEST_KMERS):
-	for d in eg$(KMER)?.dat; do \
-	    r=`echo $$d | sed 's/dat/ref/'`; \
+	for d in eg$(KMER)?.sam; do \
+	    echo "Testing $$d"; \
+	    r=`echo $$d | sed 's/sam/ref/'`; \
 	    if [ -e $$r ]; \
 	    then ./assem_bam_k$(KMER) $$d $$r 2>/dev/null | sed -n '/^@HD/,$$p' > _$(KMER);\
 	    else ./assem_bam_k$(KMER) $$d     2>/dev/null | sed -n '/^@HD/,$$p' > _$(KMER);\
 	    fi; \
-	    cmp _$(KMER) `echo $$d | sed 's/dat/out/'` || exit 1; \
+	    diff _$(KMER) `echo $$d | sed 's/sam/out/'` || exit 1; \
 	    rm _$(KMER); \
 	done
 
@@ -90,9 +91,9 @@ update_test18: KMER=18
 update_test18: assem_bam_k18 update_test_kmer18
 
 $(UPDATE_KMERS):
-	for d in eg$(KMER)?.dat; do \
-	    r=`echo $$d | sed 's/dat/ref/'`; \
-	    o=`echo $$d | sed 's/dat/out/'`; \
+	for d in eg$(KMER)?.sam; do \
+	    r=`echo $$d | sed 's/sam/ref/'`; \
+	    o=`echo $$d | sed 's/sam/out/'`; \
 	    if [ -e $$r ]; \
 	    then ./assem_bam_k$(KMER) $$d $$r 2>/dev/null | sed -n '/^@HD/,$$p' > $$o; \
 	    else ./assem_bam_k$(KMER) $$d     2>/dev/null | sed -n '/^@HD/,$$p' > $$o; \

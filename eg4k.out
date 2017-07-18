@@ -1,0 +1,26 @@
+@HD	VN:1.4	SO:coordinate
+@SQ	SN:x	LN:100
+@CO
+@CO	123456        78901234
+@CO	AGCTAT--------ACGTACAC
+@CO	
+@CO	AGCTAT
+@CO	  CTATgacg
+@CO	    ATgacgXt
+@CO	      gacgatca
+@CO	      --cXatca
+@CO	      --cXatcaAC
+@CO	      ----atcaACGT
+@CO	      ------caACGTAC
+@CO	              ACGTACAC
+a1	0	x	1	40	6M	*	0	0	AGCTAT	*
+a2	0	x	3	40	4M4I	*	0	0	CTATGACG	*
+a3	0	x	5	40	2M4I2S	*	0	0	ATGACGCT	*
+a4	0	x	7	40	8I	*	0	0	GACGATCA	*
+a4	0	x	7	40	8I	*	0	0	GACGATCA	*
+a4	0	x	7	40	6I2S	*	0	0	GACGATAA	*
+a5	0	x	7	40	2S4P4I2M	*	0	0	CCATCAAC	*
+a6	0	x	7	40	4P4I4M	*	0	0	ATCAACGT	*
+a6	0	x	7	40	4P4I4M	*	0	0	ATCAACGT	*
+a7	0	x	7	40	6P2I6M	*	0	0	CAACGTAC	*
+a8	0	x	7	40	8M	*	0	0	ACGTACAC	*
