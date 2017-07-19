@@ -1536,7 +1536,7 @@ int merge_head_tips(dgraph_t *g, char *ref, int len) {
 
     for (i = 0; i < len - g->kmer; i++) {
 	node_t *h = find_node(g, ref+i, g->kmer, 0);
-	if (h->n_in <= 1)
+	if (!h || h->n_in <= 1)
 	    continue;
 
 	// More than one node => head tip
@@ -2575,6 +2575,8 @@ int main(int argc, char **argv) {
 //    correct_errors(haps, nhaps, 5);
 //    correct_errors(haps, nhaps, 5);
 
+ bigger_kmer:
+
     for (; kmer < MAX_KMER; kmer += 10) {
 	fprintf(stderr, "Building graph with kmer=%d\n", kmer);
 	g = graph_create(kmer);
@@ -2613,7 +2615,13 @@ int main(int argc, char **argv) {
 	ref->seq[ref_len + g->kmer-1] = 0;
 	memmove(ref->seq + g->kmer-1, ref->seq, ref_len);
 	memset(ref->seq, 'N', g->kmer-1);
-	add_seq(g, ref->seq, 0, IS_REF);
+	if (add_seq(g, ref->seq, 0, IS_REF) < 0) {
+	    fprintf(stderr, "Loop when adding reference\n");
+	    graph_destroy(g);
+	    if ((kmer += 10) < MAX_KMER)
+		goto bigger_kmer;
+	    return 1;
+	}
 
 	shift = atoi(ref->name); // ref start, not bam start.  
     }
@@ -2626,21 +2634,27 @@ int main(int argc, char **argv) {
     graph2dot(g, "g.dot", 0);
 
     haps_t *cons = compute_consensus(g); 
-    add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON); 
+    if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0) {
+	fprintf(stderr, "Loop when adding consensus\n");
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+	return 1;
+    }
     if (!ref)
 	ref = cons;
 
-    // Merge in head & tail tips
-    int merged;
-    do {
-	merged = 0;
-	if (ref)
-	    merged += merge_head_tips(g, ref->seq, strlen(ref->seq));
-	graph2dot(g, "H.dot", 0);
-
-	merged += merge_tail_tips(g);
-	graph2dot(g, "T.dot", 0);
-    } while (merged);
+//    // Merge in head & tail tips
+//    int merged;
+//    do {
+//	merged = 0;
+//	if (ref)
+//	    merged += merge_head_tips(g, ref->seq, strlen(ref->seq));
+//	graph2dot(g, "H.dot", 0);
+//
+//	merged += merge_tail_tips(g);
+//	graph2dot(g, "T.dot", 0);
+//    } while (merged);
 
     // Now also merge in reference bubbles
     find_bubbles(g, 1);
