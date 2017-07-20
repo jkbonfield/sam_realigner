@@ -180,7 +180,7 @@ typedef struct node_t {
     HashItem **hi;
     int n_hi;
     int bases[MAX_KMER][5];
-    int base_count;
+    int count;
     struct edge *in[MAX_EDGE], *out[MAX_EDGE]; // incoming and outgoing edges
     int n_in, n_out;
     int pruned;
@@ -329,7 +329,7 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
 	int j;
 	for (j = 0; j < len; j++)
 	    node->bases[j][base_val[seq[j] & 0x7f]]++;
-	node->base_count = 1;
+	node->count = 0;
 
 	HashData hd;
 	hd.p = node;
@@ -460,6 +460,7 @@ edge_t *incr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int r
 	return NULL;
 
     e->count++;
+    n2->count++;
 
     return e;
 }
@@ -909,15 +910,27 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		//    for (i = 0; i < 5; i++)
 		//	n1->bases[j][i] += n2->bases[j][i];
 		//}
-		n1->base_count += n2->base_count;
 
 		// Fix node hash keys
-		for (i = 0; i < n2->n_hi; i++) {
-		    HashItem *hi = n2->hi[i];
-		    hi->data.p = n1;
-		    n1->hi = realloc(n1->hi, (n1->n_hi+1)*sizeof(*n1->hi));
-		    n1->hi[n1->n_hi++] = hi;
+		//fprintf(stderr, "%s (%d) vs %s (%d)\n", n1->hi[0]->key, n1->count, n2->hi[0]->key, n2->count);
+		n1->hi = realloc(n1->hi, (n1->n_hi + n2->n_hi)*sizeof(*n1->hi));
+		if (n1->count >= n2->count) {
+		    for (i = 0; i < n2->n_hi; i++) {
+			HashItem *hi = n2->hi[i];
+			hi->data.p = n1;
+			n1->hi[n1->n_hi++] = hi;
+		    }
+		} else {
+		    memmove(&n1->hi[n2->n_hi], &n1->hi[0], n1->n_hi*sizeof(*n1->hi));
+		    for (i = 0; i < n2->n_hi; i++) {
+			HashItem *hi = n2->hi[i];
+			hi->data.p = n1;
+			n1->hi[i] = hi;
+		    }
+		    n1->n_hi += n2->n_hi;
 		}
+
+		n1->count += n2->count;
 
 		// Merge incoming.
 		for (i = 0; i < n2->n_in; i++) {
@@ -934,6 +947,22 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 			//for (j = 0; j < n3->n_out; j++)
 			//    if (n3->out[j]->n[1] == n2->id)
 			//	n3->out[j]->n[1] = n1->id;
+		    } else if (j != n1->n_in && n2->in[i]->n[1] != start &&
+			       ((x2+1 >= np2) ||
+				(x2+1 < np2 && path2[x2+1]->id != n2->in[i]->n[1]))) {
+			// shared node, parent(n1) is also parent(n2) and
+			// not on path, so ensure we delete the edge linking
+			//to n2 // although we don't need to add it to n1 as
+			// it's already there.
+			node_t *n3 = g->node[n2->in[i]->n[1]];
+			// remove edge out
+			int k, l;
+			for (k = l = 0; k < n3->n_out; k++) {
+			    if (n3->out[k]->n[1] == n2->id)
+				continue;
+			    n3->out[l++] = n3->out[k];
+			}
+			n3->n_out = l;
 		    }
 		}
 
@@ -1633,7 +1662,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 //		n->is_head ? "green3" : n->is_tail ? "skyblue" : "black",
 //		n->id);
 
-	fprintf(fp, "  n_%d [label=\"%d @ %d", n->id, n->id, n->pos);
+	fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
 	if (n->ins) fprintf(fp, ".%d", n->ins);
 	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
 	if (n->posa) {
@@ -1851,7 +1880,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
     int cig_a[MAX_CIGAR];
     int cig_ind = 0;
 
-    //printf("Orig seq = %.*s\n", len, seq);
+    //fprintf(stderr, "Orig seq = %.*s\n", len, seq);
 
     int last_ins = 0;
     int since_mat = 0;
@@ -1928,7 +1957,6 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 			if (memcmp(sub_k-j+1, s2->hi[h]->key+1, g->kmer-1) == 0) {
 			    // Matches bar first N, fix base
 			    *(sub_k-j) = *s2->hi[h]->key;
-			    //printf(" => %.*s\n", g->kmer, sub_k-j);
 			    sn = s2;
 			    break;
 			}
@@ -2274,7 +2302,8 @@ int correct_errors(haps_t *h, int n, int min_count) {
 	char *seq = h[i].seq;
 	char *s2 = strdup(seq);
 	int len = strlen(seq), j;
-	for (j = 0; j < len-ERRK; j++) {
+#define EDGE_DIST 3
+	for (j = EDGE_DIST; j < len-ERRK-EDGE_DIST; j++) {
 	    HashItem *hi, *hi2;
 
 	    hi = HashTableSearch(hash, seq+j, ERRK);
@@ -2569,11 +2598,13 @@ int main(int argc, char **argv) {
 
     // Successive rounds allows for fixing more than 1 error in a read.
     fprintf(stderr, "Correcting\n");
-    correct_errors(haps, nhaps, 3);
-//    correct_errors(haps, nhaps, 4);
-//    correct_errors(haps, nhaps, 5);
-//    correct_errors(haps, nhaps, 5);
-//    correct_errors(haps, nhaps, 5);
+    // 6- poor (3)
+    // 7..10 good (3)
+    // 11+ poor (3)
+    for (i = 0; i < 3; i++)
+	correct_errors(haps, nhaps, 2);
+
+//    correct_errors(haps, nhaps, 3);
 
  bigger_kmer:
 

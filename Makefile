@@ -47,7 +47,7 @@ clean:
 
 TEST_KMERS=test_kmer3 test_kmer4 test_kmer13 test_kmer18
 .PHONY: test test3 test4 test13 test18 $(TEST_KMERS)
-test: test3 test4 test13 test18
+test check: test3 test4 test13 test18
 
 
 test3: KMER=3
