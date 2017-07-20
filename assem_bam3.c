@@ -465,6 +465,38 @@ edge_t *incr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int r
     return e;
 }
 
+int decr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int ref) {
+    node_t *n1 = find_node(g, seq1, len1, 1);
+    node_t *n2 = find_node(g, seq2, len2, 1);
+
+    if (!n1 || !n2)
+	return -1;
+
+    edge_t *e = find_edge(g, n1, n2);
+    if (!e)
+	return -1;
+
+    e->count--;
+    n2->count--;
+
+    if (e->count <= 0) {
+	HashTableRemove(g->edge_hash, (char *)e->n, 2*sizeof(*e->n), 0);
+	int i, j;
+	for (i = j = 0; i < n1->n_out; i++)
+	    if (n1->out[i]->n[1] != n2->id)
+		n1->out[j++] = n1->out[i];
+	n1->n_out = j;
+	for (i = j = 0; i < n2->n_in; i++)
+	    if (n2->in[i]->n[1] != n1->id)
+		n2->in[j++] = n2->in[i];
+	n2->n_in = j;
+
+	free(e);
+    }
+
+    return 0;
+}
+
 // We ensure this node is not within our previous list of visited nodes.
 static int loop_check_recurse(dgraph_t *g, node_t *n, char *visited) {
     // Simple linear list
@@ -580,8 +612,10 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 	if (!(e = incr_edge(g, s+i, g->kmer, s+i+1, g->kmer, ref)))
 	    return -1;
 
-	if (g->node[e->n[1]]->visited == counter)
+	if (g->node[e->n[1]]->visited == counter) {
+	    // cull edge
 	    return -1; // loop
+	}
 
 	g->node[e->n[1]]->visited = counter;
 
@@ -599,6 +633,39 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 		n2->pos = i+1;
 	    n2->ref |= ref;
 	}
+    }
+
+    free(s);
+
+    return 0;
+}
+
+int del_seq(dgraph_t *g, char *seq, int len, int ref) {
+    int i, j;
+
+    if (!len)
+	len = strlen(seq);
+
+    if (!(ref & IS_REF)) {
+	// Prune trailing Ns.
+	while (*seq == 'N' && len > 0)
+	    seq++, len--;
+	while (seq[len-1] == 'N' && len > 0)
+	    len--;
+
+	if (len == 0)
+	    return 0;
+    }
+
+    char *s = malloc(len);
+    for (i = j = 0; i < len; i++)
+	if (seq[i] != '*')
+	    s[j++] = toupper(seq[i]);
+    len = j;
+
+    // split into successive pairs of kmers, incrementing edges
+    for (i = 0; i < len - g->kmer; i++) {
+	decr_edge(g, s+i, g->kmer, s+i+1, g->kmer, ref);
     }
 
     free(s);
@@ -2096,7 +2163,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	    }
 	}
 
-	if (cig_op == BAM_CINS && n->ins == 0) {
+	if (cig_op == BAM_CINS && n && n->ins == 0) {
 	    fprintf(stderr, "ending on ins, n->ins=%d last_ins=%d cig_len=%d\n", n->ins, last_ins, cig_len);
 	    // partial match to known insertion plus partial mismatch => softclip?
 	    //
@@ -2602,22 +2669,31 @@ int main(int argc, char **argv) {
     // 7..10 good (3)
     // 11+ poor (3)
     for (i = 0; i < 3; i++)
-	correct_errors(haps, nhaps, 2);
+	correct_errors(haps, nhaps, 3);
 
 //    correct_errors(haps, nhaps, 3);
 
  bigger_kmer:
 
+    // If our mapped sequences can be processed with a sensible kmer,
+    // but the unmapped cannot, then maybe it's just the unmapped is
+    // a broken homo-polymer.  In which case keep it unmapped and ignore
+    // it.
     for (; kmer < MAX_KMER; kmer += 10) {
 	fprintf(stderr, "Building graph with kmer=%d\n", kmer);
 	g = graph_create(kmer);
 	for (i = 0; i < nhaps; i++) {
 	    if (add_seq(g, haps[i].seq, 0, 0) != 0) {
-		// loop within a sequence
-		fprintf(stderr, "Loop detected within seq %s\n", haps[i].seq);
+		// loop within a sequence.  If unmapped, we'll just skip using it
+		if (bams[i].core.flag & BAM_FUNMAP) {
+		    del_seq(g, haps[i].seq, 0, 0);
+		    continue;
+		}
+		fprintf(stderr, "Loop detected within mapped seq %s\n", haps[i].seq);
 		break;
 	    }
 	}
+
 	if (i == nhaps && loop_check(g) == 0)
 	    break;
 
