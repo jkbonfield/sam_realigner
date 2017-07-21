@@ -1038,7 +1038,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		    // Migrate n2->out unless n2->out on // n1 path
 		    for (j = 0; j < n1->n_out; j++)
 			if (n1->out[j]->n[1] == n2->out[i]->n[1] ||
-			    (x2 > 0 && n2->out[i]->n[1] == path2[x2-1]->id))
+			    (x2 > 0 && path2[x2-1] && n2->out[i]->n[1] == path2[x2-1]->id))
 			    break;
 		    if (j == n1->n_out) { // not already a child
 			if (n2->out[i]->n[1] != n_end->id)
@@ -1051,7 +1051,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		int k;
 		for (j = k = 0; j < n1->n_out; j++) {
 		    for (i = 0; i < n2->n_out; i++)
-			if (x2 > 0 && n1->out[j]->n[1] == path2[x2-1]->id)
+			if (x2 > 0 && path2[x2-1] && n1->out[j]->n[1] == path2[x2-1]->id)
 			    break;
 		    if (i == n2->n_out)
 			n1->out[k++] = n1->out[j];
@@ -1115,8 +1115,8 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 			if (p2) {
 			    for (i = 0; i < p2->n_out; i++) {
 				if (p2->out[i]->n[1] == n2->id) {
-				    memmove(&p2->out[0], &p2->out[i],
-					    (p2->n_out - i - 1) * sizeof(p2->out[0]));
+				    memmove(&p2->out[i], &p2->out[i+1],
+					    (p2->n_out - (i+1)) * sizeof(p2->out[0]));
 				    p2->n_out--;
 				    i--;
 				}
@@ -1128,6 +1128,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 
 		    //n2->bases[g->kmer-1][4]++;
 
+		    path2[x2] = NULL;
 		    l2 = n2;
 		    n2 = path2[++x2];
 		}
@@ -1819,7 +1820,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 #define MAX_GRAPH_KEY 100
 
-#if 1
+#if 0
 	// Hash key -> node map
 	HashIter *iter = HashTableIterCreate();
 	HashItem *hi;
@@ -2330,7 +2331,7 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
 // min_count, but high coverage or lots of low complexity data won't
 // increase it.
 HashTable *kmer_hash = NULL, *neighbours = NULL;
-int correct_errors(haps_t *h, int n, int min_count) {
+int correct_errors(haps_t *h, int n, int errk, int min_count) {
     //HashTable *hash, *neighbours;
     HashItem *hi;
     int i, counth = 0, countw = 0;
@@ -2346,13 +2347,13 @@ int correct_errors(haps_t *h, int n, int min_count) {
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
 	int len = strlen(seq), j;
-	for (j = 0; j < len-ERRK; j++) {
+	for (j = 0; j < len-errk; j++) {
 	    HashData hd;
 	    HashItem *hi;
 	    int nw, k;
 
 	    hd.i = 0;
-	    hi = HashTableAdd(hash, seq+j, ERRK, hd, &nw);
+	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
 	    hi->data.i++;
 	    counth++;
 	    countw+=nw;
@@ -2367,13 +2368,13 @@ int correct_errors(haps_t *h, int n, int min_count) {
 
     HashIter *hiter = HashTableIterCreate();
     while ((hi = HashTableIterNext(hash, hiter))) {
-	//printf("%.*s %d\n", ERRK, hi->key, hi->data.i);
+	//printf("%.*s %d\n", errk, hi->key, hi->data.i);
 	if (hi->data.i >= avg) {
 	    int j;
 	    char *s = hi->key;
-	    char N[ERRK];
-	    memcpy(N, hi->key, ERRK);
-	    for (j = 0; j < ERRK; j++) {
+	    char N[errk];
+	    memcpy(N, hi->key, errk);
+	    for (j = 0; j < errk; j++) {
 		int nw, k;
 		HashData hd;
 		hd.p = hi->key;
@@ -2382,7 +2383,7 @@ int correct_errors(haps_t *h, int n, int min_count) {
 		    HashItem *hi2;
 		    if ("ACGT"[k] == base) continue;
 		    N[j] = "ACGT"[k];
-		    hi2 = HashTableAdd(neighbours, N, ERRK, hd, &nw);
+		    hi2 = HashTableAdd(neighbours, N, errk, hd, &nw);
 		    if (!nw) hi2->data.p = NULL; // mark the clash
 		}
 		N[j] = base;
@@ -2394,9 +2395,9 @@ int correct_errors(haps_t *h, int n, int min_count) {
 //    HashTableIterReset(hiter);
 //    while ((hi = HashTableIterNext(hash, hiter))) {
 //	//if (hi->data.i >= min_count) continue;
-//	HashItem *hi_n = HashTableSearch(neighbours, hi->key,  ERRK);
-//	printf("%.*s %d -> %.*s\n", ERRK, hi->key, (int)hi->data.i,
-//	       ERRK, hi_n ? (char *)hi_n->data.p : 0);
+//	HashItem *hi_n = HashTableSearch(neighbours, hi->key,  errk);
+//	printf("%.*s %d -> %.*s\n", errk, hi->key, (int)hi->data.i,
+//	       errk, hi_n ? (char *)hi_n->data.p : 0);
 //	if (!hi_n) continue;
 //    }
 
@@ -2410,22 +2411,22 @@ int correct_errors(haps_t *h, int n, int min_count) {
 	char *s2 = strdup(seq);
 	int len = strlen(seq), j;
 #define EDGE_DIST 3
-	for (j = EDGE_DIST; j < len-ERRK-EDGE_DIST; j++) {
+	for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {
 	    HashItem *hi, *hi2;
 
-	    hi = HashTableSearch(hash, seq+j, ERRK);
+	    hi = HashTableSearch(hash, seq+j, errk);
 	    if (!hi || hi->data.i >= min_count)
 		continue;
 
-	    hi2 = HashTableSearch(neighbours, hi->key, ERRK);
+	    hi2 = HashTableSearch(neighbours, hi->key, errk);
 	    if (!hi2 || !hi2->data.p) {
-		//fprintf(stderr, "No correction for %.*s %d\n", ERRK, hi->key, hi->data.i);
+		//fprintf(stderr, "No correction for %.*s %d\n", errk, hi->key, hi->data.i);
 		continue;
 	    }
 
-	    memcpy(s2+j, hi2->data.p, ERRK);
+	    memcpy(s2+j, hi2->data.p, errk);
 	    nc++;
-	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", ERRK, hi->key, hi->data.i, ERRK, hi2->data.p);
+	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
 	}
 	free(seq);
 	h[i].seq = s2;
@@ -2709,10 +2710,13 @@ int main(int argc, char **argv) {
     // 6- poor (3)
     // 7..10 good (3)
     // 11+ poor (3)
-    for (i = 0; i < 3; i++)
-	correct_errors(haps, nhaps, 3);
+//    for (i = 0; i < 3; i++)
+//	correct_errors(haps, nhaps, ERRK, 3);
 
-//    correct_errors(haps, nhaps, 3);
+    correct_errors(haps, nhaps, 27, 3);
+    correct_errors(haps, nhaps, 25, 1);
+    correct_errors(haps, nhaps, 20, 1);
+    correct_errors(haps, nhaps, 14, 1);
 
  bigger_kmer:
 
