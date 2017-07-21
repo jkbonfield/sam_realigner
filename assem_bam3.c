@@ -1105,7 +1105,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 			// Cull parent(n2) out (to n2)
 			node_t *p2 = g->node[n2->in[0]->n[1]];
 			n2->in[0]->n[1] = n1->id;
-			for (i = 0; i < n2->n_out; i++)
+			for (i = 0; i < n1->n_out; i++)
 			    if (n1->out[i]->n[1] == n2->id)
 				break;
 			if (i == n1->n_out)
@@ -1687,6 +1687,35 @@ void prune(dgraph_t *g, int min_count) {
     //prune_bubbles(g, min_count);
 }
 
+void validate_graph(dgraph_t *g) {
+    int i, j, k;
+
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned)
+	    continue;
+
+	for (j = 0; j < n->n_in; j++) {
+	    //assert(n->in[j]->n[0] == n->id);
+	    node_t *p = g->node[n->in[j]->n[1]];
+	    for (k = 0; k < p->n_out; k++)
+		if (p->out[k]->n[1] == n->id)
+		    break;
+	    assert(k < p->n_out);
+	}
+
+
+	for (j = 0; j < n->n_out; j++) {
+	    //assert(n->out[j]->n[0] == n->id);
+	    node_t *p = g->node[n->out[j]->n[1]];
+	    for (k = 0; k < p->n_in; k++)
+		if (p->in[k]->n[1] == n->id)
+		    break;
+	    assert(k < p->n_in);
+	}
+    }
+}
+
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     FILE *fp = stdout;
 
@@ -1729,8 +1758,10 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 //		n->is_head ? "green3" : n->is_tail ? "skyblue" : "black",
 //		n->id);
 
-	fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
-	if (n->ins) fprintf(fp, ".%d", n->ins);
+
+	//fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
+	//if (n->ins) fprintf(fp, ".%d", n->ins);
+	fprintf(fp, "  n_%d [label=\"%d", n->id, n->id, n->pos, n->count);
 	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
 	if (n->posa) {
 	    for (j = 0; j < g->kmer; j++) {
@@ -1777,7 +1808,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 #if 0
 	// incoming edges
 	for (j = 0; j < n->n_in; j++) {
-	    fprintf(fp, "  n_%d -> n_%d [color=\"skyblue\"]\n", n->id, n->in[j]->n[1]);
+	    fprintf(fp, "  n_%d -> n_%d [color=\"blue\"]\n", n->id, n->in[j]->n[1]);
 	}
 #endif
     }
@@ -1810,8 +1841,11 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 	fprintf(fp, "}\n");
 
+
+	validate_graph(g);
 	if (fn)
 	    return fclose(fp);
+
 	return 0;
 }
 
@@ -2295,12 +2329,18 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
 // use this to cap min_count?  So low coverage would reduce,
 // min_count, but high coverage or lots of low complexity data won't
 // increase it.
+HashTable *kmer_hash = NULL, *neighbours = NULL;
 int correct_errors(haps_t *h, int n, int min_count) {
-    HashTable *hash, *neighbours;
+    //HashTable *hash, *neighbours;
     HashItem *hi;
     int i, counth = 0, countw = 0;
+
+    HashTable *hash = kmer_hash;
+    if (hash) HashTableDestroy(hash, 0);
+    if (neighbours) HashTableDestroy(neighbours, 0);
     
     hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    kmer_hash = hash;
 
     // Hash words
     for (i = 0; i < n; i++) {
@@ -2393,8 +2433,8 @@ int correct_errors(haps_t *h, int n, int min_count) {
     fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth);
 
 
-    HashTableDestroy(hash, 0);
-    HashTableDestroy(neighbours, 0);
+//    HashTableDestroy(hash, 0);
+//    HashTableDestroy(neighbours, 0);
 
     return 0;
 }
@@ -2594,7 +2634,7 @@ bam1_t *load_bam(char *fn, int *nrecs, bam_hdr_t **hdr_p) {
     samFile *in = sam_open(fn, "r");
     bam_hdr_t *hdr;
     int nalloc = 128, nr = 0;
-    bam1_t *bams = malloc(128 * sizeof(*bams));
+    bam1_t *bams = calloc(128, sizeof(*bams));
 
     if (!in)
 	return NULL;
@@ -2606,6 +2646,7 @@ bam1_t *load_bam(char *fn, int *nrecs, bam_hdr_t **hdr_p) {
 	if (++nr >= nalloc) {
 	    nalloc *= 2;
 	    bams = realloc(bams, nalloc * sizeof(*bams));
+	    memset(&bams[nalloc/2], 0, nalloc/2*sizeof(*bams));
 	}
     }
 
