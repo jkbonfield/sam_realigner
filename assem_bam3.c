@@ -135,8 +135,8 @@ char *vec2seq(int (*v)[5], int len) {
 
 int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
 	     int G, int H, int *S, int s1, int s2, int e1, int e2) {
-    char *seq1 = vec2seq(v1, len1); puts(seq1);
-    char *seq2 = vec2seq(v2, len2); puts(seq2);
+    char *seq1 = vec2seq(v1, len1); //puts(seq1);
+    char *seq2 = vec2seq(v2, len2); //puts(seq2);
     
     int score = align_ss(seq1, seq2, len1, len2, 0,0, X128, G,H, S, s1,s2,e1,e2);
 
@@ -170,8 +170,9 @@ typedef struct haps {
 #  define MAX_SEQ 1024
 #endif
 
+// FIXME: needs to be adaptive
 #ifndef MAX_EDGE
-#  define MAX_EDGE 5
+#  define MAX_EDGE 16
 #endif
 
 struct edge;
@@ -923,7 +924,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    }
 	}
 
-	printf("x1=%d of %d, x2=%d of %d, p=%d\n", x1, len1, x2, len2, p);
+	//printf("x1=%d of %d, x2=%d of %d, p=%d\n", x1, len1, x2, len2, p);
 	// gap at end
 	while (x1 < len1) {
 	    // Already in path1 only, nothing to do with path2

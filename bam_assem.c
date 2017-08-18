@@ -139,8 +139,8 @@ char *vec2seq(int (*v)[5], int len) {
 
 int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
 	     int G, int H, int *S, int s1, int s2, int e1, int e2) {
-    char *seq1 = vec2seq(v1, len1); puts(seq1);
-    char *seq2 = vec2seq(v2, len2); puts(seq2);
+    char *seq1 = vec2seq(v1, len1); //puts(seq1);
+    char *seq2 = vec2seq(v2, len2); //puts(seq2);
     
     int score = align_ss(seq1, seq2, len1, len2, 0,0, X128, G,H, S, s1,s2,e1,e2);
 
@@ -174,8 +174,9 @@ typedef struct haps {
 #  define MAX_SEQ 1024
 #endif
 
+// FIXME: needs to be adaptive
 #ifndef MAX_EDGE
-#  define MAX_EDGE 5
+#  define MAX_EDGE 16
 #endif
 
 struct edge;
@@ -927,7 +928,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    }
 	}
 
-	printf("x1=%d of %d, x2=%d of %d, p=%d\n", x1, len1, x2, len2, p);
+	//printf("x1=%d of %d, x2=%d of %d, p=%d\n", x1, len1, x2, len2, p);
 	// gap at end
 	while (x1 < len1) {
 	    // Already in path1 only, nothing to do with path2
@@ -1180,7 +1181,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     free(v2);
     free(vn);
 
-    {
+    if (0) {
 	static int n=0;
 	char buf[100];
 	sprintf(buf, "_bub%d.dot", n++);
@@ -1324,7 +1325,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 		int merge_id = n->in[0]->n[1];
 //		printf("Bubble detected with node %d (%d, %d)\n",
 //		       n->id, merge_id, pn->id);
-		graph2dot(g, "_before.dot", 0);
+		//graph2dot(g, "_before.dot", 0);
 
 		//rewind_paths(g, &head, merge_id, n);
 
@@ -1349,7 +1350,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 		    printf("\n");
 		}
 
-		graph2dot(g, "_after.dot", 0);
+		//graph2dot(g, "_after.dot", 0);
 
 		// FIXME: one of these paths may have progressed further beyond
 		// the merge point.  We merge right into left, so right one must
@@ -2566,7 +2567,7 @@ haps_t *compute_consensus(dgraph_t *g) {
     h->seq = seq.s;
     h->pos = 0;
 
-    printf("Cons = %s\n", seq.s);
+    //printf("Cons = %s\n", seq.s);
 
     return h;
 }
@@ -2596,7 +2597,7 @@ haps_t *bam2haps(bam1_t **bams, int nrecs) {
     return haps;
 }
 
-static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_start) {
+static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_len, int ref_start) {
     samFile *fp;
     int i;
 
@@ -2612,17 +2613,17 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
 	abort();
 
     FILE *f = fopen("_tmp.ref", "w");
-    fprintf(f, ">%d\n%s\n", ref_start, ref);
+    fprintf(f, ">%d\n%.*s\n", ref_start, ref_len, ref);
     fclose(f);
 }
 
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
-		char *ref_seq, int ref_start) {
+		char *ref_seq, int ref_len, int ref_start) {
     int i, kmer = KMER;
     dgraph_t *g;
     haps_t *haps = NULL;
 
-    dump_input(hdr, bams, nbams, ref_seq, ref_start);
+    dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start);
 
     init_W128_score(-4,1);
     init_X128_score(-4,4);
@@ -2691,9 +2692,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	    return -1;
 	ref->name = "Ref";
 	ref->pos = ref_start;
-	fprintf(stderr, "ref=%s\n", ref_seq);
+	fprintf(stderr, "ref=%.*s\n", ref_len, ref_seq);
 
-	int ref_len = strlen(ref_seq);
 	ref->seq = malloc(ref_len + g->kmer-1 + 1);
 	ref->seq[ref_len + g->kmer-1] = 0;
 	memcpy(ref->seq + g->kmer-1, ref_seq, ref_len);
@@ -2709,12 +2709,12 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	shift = ref_start + 1;
     }
 
-    graph2dot(g, "_F.dot", 0);
+    //graph2dot(g, "_F.dot", 0);
 
     // Merge bubbles excluding reference
     find_bubbles(g, 0);
 
-    graph2dot(g, "_g.dot", 0);
+    //graph2dot(g, "_g.dot", 0);
 
     haps_t *cons = compute_consensus(g); 
     if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0) {
@@ -2730,13 +2730,13 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // Now also merge in reference bubbles
     find_bubbles(g, 1);
 
-    graph2dot(g, "_G.dot", 0);
+    //graph2dot(g, "_G.dot", 0);
 
     // Strings of bases inserted between reference coords
     // permit us to generate alignments starting or ending
     // inside the insertions.
     find_insertions(g);
-    graph2dot(g, "_I.dot", 0);
+    //graph2dot(g, "_I.dot", 0);
 
     //fprintf(stderr, "Pruning\n");
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);

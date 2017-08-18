@@ -66,7 +66,8 @@
  */
 
 // Default params
-#define MARGIN 10
+#define MARGIN 20   // margin around suspect regions
+#define CON_MARGIN 20 // margin to add on to consensus when realigning
 #define MIN_INDEL 2
 
 #define MAX_DEPTH 20000
@@ -343,7 +344,8 @@ int check_overlap(bam_sorted_list *bl, int start, int *start_ovl, int *end_ovl) 
     return 0;
 }
 
-int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl, char *cons,
+int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
+		 char *cons, int cons_len,
 		 int start, int end, int start_ovl, int end_ovl) {
     bam_sorted_item *bi, *next;
     int count = 0, ba_sz = 0;
@@ -360,6 +362,10 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl, char *cons,
 	    //fprintf(stderr, "   [%d..%d (of %d..%d)] END\n", bi->b->core.pos, bi->end_pos, start, end);
 	    break;
 	}
+
+	// Do we want to try realigning unmapped data too? Maybe...
+	if (bi->b->core.flag & BAM_FUNMAP)
+	    continue;
 
 	if (count >= ba_sz) {
 	    ba_sz = ba_sz ? ba_sz*2 : 256;
@@ -379,11 +385,14 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl, char *cons,
 	return -1;
     }
 
-    extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_pos);
+    int i;
+    for (i = 0; i < count; i++)
+	new_pos[i] = ba[i]->core.pos;
+    extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_len, int ref_pos);
     // FIXME: compute "ref" as cigar oriented consensus? Maybe cannot
     // when deletion?
     char *ref = NULL;//get_ref(ref_pos); // fixme; shouldn't be strdup, but return ptr+len
-    if (bam_realign(hdr, ba, count, new_pos, cons, start_ovl) < 0) {
+    if (bam_realign(hdr, ba, count, new_pos, cons, cons_len, start_ovl) < 0) {
 	free(new_pos);
 	free(ba);
 	return -1;
@@ -392,7 +401,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl, char *cons,
 
     // Resort the list as realignment can move reads around.
     bi = RB_MIN(bam_sort, bl);
-    int i = 0;
+    i = 0;
     while (bi) {
 	next = RB_NEXT(bam_sort, bl, bi);
 	if (bi->b == ba[i]) {
@@ -405,7 +414,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl, char *cons,
 
 	bi = next;
     }
-    assert(i == count);
+    assert(i == count); // FIXME: CON_MARGIN 50 triggers this sometimes.  Why?
     
     free(new_pos);
     free(ba);
@@ -564,6 +573,8 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
     int flush_pos = 0;
 
     char *cons = malloc(1024);
+    assert(CON_MARGIN < 1024);
+    memset(cons, 'N', 1024);
     int cons_sz = 1024;
     int start_cons = -1;
 
@@ -575,7 +586,7 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 	unsigned char base;
 
 	if (start_cons == -1)
-	    start_cons = pos;
+	    start_cons = pos-CON_MARGIN;
 
 	count_columns++;
 
@@ -790,13 +801,11 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 		    end_ovl = right_most;
 		//fprintf(stderr, "PROB extnd %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
 	    } else {
-		if (left_most > end_reg) {
-		    fprintf(stderr, "PROB %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
-		    int tmp = cons[end_ovl+1 - start_cons];
-		    cons[end_ovl+1 - start_cons] = 0; // FIXME send cons + len instead
-		    realign_list(&cd, header, b_hist, cons + start_ovl - start_cons,
-				 start_reg, end_reg, start_ovl, end_ovl);
-		    cons[end_ovl+1 - start_cons] = tmp;
+		if (left_most > end_reg && pos > end_ovl + CON_MARGIN) {
+		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", pos, start_reg, end_reg, start_ovl, end_ovl);
+		    realign_list(&cd, header, b_hist, cons + start_ovl-CON_MARGIN - start_cons,
+				 end_ovl - start_ovl + 2*CON_MARGIN,
+				 start_reg, end_reg, start_ovl-CON_MARGIN, end_ovl+CON_MARGIN);
 		    start_reg = end_reg = left_most;
 		    start_ovl = end_ovl = 0;
 		    status = S_OK;
