@@ -163,7 +163,7 @@ typedef struct haps {
 #endif
 
 #ifndef MAX_KMER
-#  define MAX_KMER 100
+#  define MAX_KMER 150
 #endif
 
 #ifndef MAX_SEQ
@@ -498,6 +498,103 @@ int decr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int ref) 
     return 0;
 }
 
+#if 1
+// Branch downwards, failing at n->visited == check_num and
+// stopping if we hit the end or an earlier visit (0 < n->visited < chunk_num);
+static int loop_check_recurse_broke(dgraph_t *g, node_t *n, int check_num, int level) {
+    //fprintf(stderr, "n=%d level=%d visit=%d\n", n->id, level, n->visited);
+
+    for(;;) {
+	//fprintf(stderr, "    n=%d visit=%d/%d\n", n->id, n->visited, check_num);
+	if (n->id >= g->nnodes || n->visited >= check_num)
+	    // loop
+	    return -1;
+
+	if (n->visited > 0 && n->visited < check_num)
+	    // checked before
+	    return 0;
+
+	n->visited = check_num;
+
+	// Simple loop only
+	if (n->n_out != 1)
+	    break;
+
+	n = g->node[n->out[0]->n[1]];
+    }
+
+    if (n->n_out == 0)
+	return 0;
+
+    // Fork => recursion
+    int i;
+    for (i = 0; i < n->n_out; i++) {
+	if (loop_check_recurse_broke(g, g->node[n->out[i]->n[1]], check_num, level+1) < 0)
+	    return -1;
+    }
+
+    return 0;
+}
+
+// Recurse through each node checking the visitor status.
+// If it's set already then we've been here at least once, so bail out - either
+// pass or fail depending on value.
+// If it's not set, then set it, recurse, and "unset" (by decrementing).
+//
+// The decrement avoids too many calls when we start at multiple points in the graph.
+// If we reset to 0 then every starting point would need validating.
+static int loop_check_recurse(dgraph_t *g, node_t *n, int check_num, int level) {
+    //fprintf(stderr, "n=%d level=%d visit=%d\n", n->id, level, n->visited);
+
+    //fprintf(stderr, "    n=%d visit=%d/%d\n", n->id, n->visited, check_num);
+    if (n->id >= g->nnodes || n->visited >= check_num)
+	// loop
+	return -1;
+
+    if (n->visited > 0 && n->visited < check_num)
+	// checked before
+	return 0;
+
+    n->visited = check_num;
+
+    int i;
+    for (i = 0; i < n->n_out; i++) {
+	if (loop_check_recurse(g, g->node[n->out[i]->n[1]], check_num, level+1) < 0) {
+	    n->visited--;
+	    return -1;
+	}
+    }
+
+    n->visited--;
+
+    return 0;
+}
+
+int loop_check(dgraph_t *g) {
+    int i;
+    for (i = 0; i < g->nnodes; i++)
+	g->node[i]->visited = 0;
+
+    int check_num = INT_MAX/2;
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+
+	// Have we been here before? If so skip it.
+	if (n->pruned || n->visited)
+	    continue;
+	
+	// We have a head node, but it may link up with
+	// previously scanned head nodes.  All we care
+	// about is following this starting point doesn't
+	// get back to a node we're visiting in this cycle.
+	if (loop_check_recurse(g, n, ++check_num, 0) < 0)
+	    return -1;
+    }
+
+    return 0;
+}
+#else
+
 // We ensure this node is not within our previous list of visited nodes.
 static int loop_check_recurse(dgraph_t *g, node_t *n, char *visited) {
     // Simple linear list
@@ -580,6 +677,7 @@ int loop_check(dgraph_t *g) {
     free(visited);
     return 0;
 }
+#endif
 
 int add_seq(dgraph_t *g, char *seq, int len, int ref) {
     int i, j;
@@ -1763,7 +1861,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 	//fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
 	//if (n->ins) fprintf(fp, ".%d", n->ins);
-	fprintf(fp, "  n_%d [label=\"%d", n->id, n->id, n->pos, n->count);
+	fprintf(fp, "  n_%d [label=\"%d", n->id, n->id);
 	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
 	if (n->posa) {
 	    for (j = 0; j < g->kmer; j++) {
@@ -2740,6 +2838,7 @@ int main(int argc, char **argv) {
 	    }
 	}
 
+	graph2dot(g, "f.dot", 0);
 	if (i == nhaps && loop_check(g) == 0)
 	    break;
 
@@ -2753,9 +2852,8 @@ int main(int argc, char **argv) {
 	return 1;
     }
     fprintf(stderr, "Using kmer %d\n", kmer);
-
-
     graph2dot(g, "f.dot", 0);
+    assert(loop_check(g) == 0);
 
     int shift = bams[0].core.pos+1;
 
@@ -2768,7 +2866,7 @@ int main(int argc, char **argv) {
 	ref->seq[ref_len + g->kmer-1] = 0;
 	memmove(ref->seq + g->kmer-1, ref->seq, ref_len);
 	memset(ref->seq, 'N', g->kmer-1);
-	if (add_seq(g, ref->seq, 0, IS_REF) < 0) {
+	if (add_seq(g, ref->seq, 0, IS_REF) < 0 || loop_check(g)) {
 	    fprintf(stderr, "Loop when adding reference\n");
 	    graph_destroy(g);
 	    if ((kmer += 10) < MAX_KMER)
@@ -2780,19 +2878,22 @@ int main(int argc, char **argv) {
     }
 
     graph2dot(g, "F.dot", 0);
+    assert(loop_check(g) == 0);
 
     // Merge bubbles excluding reference
     find_bubbles(g, 0);
+    assert(loop_check(g) == 0);
 
     graph2dot(g, "g.dot", 0);
 
     haps_t *cons = compute_consensus(g); 
-    if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0) {
+    if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER)
 	    goto bigger_kmer;
 	return 1;
+	assert(loop_check(g) == 0);
     }
     if (!ref)
 	ref = cons;
@@ -2810,7 +2911,9 @@ int main(int argc, char **argv) {
 //    } while (merged);
 
     // Now also merge in reference bubbles
+    assert(loop_check(g) == 0);
     find_bubbles(g, 1);
+    assert(loop_check(g) == 0);
 
     graph2dot(g, "G.dot", 0);
 
@@ -2820,6 +2923,7 @@ int main(int argc, char **argv) {
     // Strings of bases inserted between reference coords
     // permit us to generate alignments starting or ending
     // inside the insertions.
+
     if (argc > 2) // we gave it a ref
 	find_insertions(g);
     graph2dot(g, "I.dot", 0);

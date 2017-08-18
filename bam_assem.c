@@ -502,6 +502,67 @@ int decr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int ref) 
     return 0;
 }
 
+#if 1
+// Recurse through each node checking the visitor status.
+// If it's set already then we've been here at least once, so bail out - either
+// pass or fail depending on value.
+// If it's not set, then set it, recurse, and "unset" (by decrementing).
+//
+// The decrement avoids too many calls when we start at multiple points in the graph.
+// If we reset to 0 then every starting point would need validating.
+static int loop_check_recurse(dgraph_t *g, node_t *n, int check_num, int level) {
+    //fprintf(stderr, "n=%d level=%d visit=%d\n", n->id, level, n->visited);
+
+    //fprintf(stderr, "    n=%d visit=%d/%d\n", n->id, n->visited, check_num);
+    if (n->id >= g->nnodes || n->visited >= check_num)
+	// loop
+	return -1;
+
+    if (n->visited > 0 && n->visited < check_num)
+	// checked before
+	return 0;
+
+    n->visited = check_num;
+
+    int i;
+    for (i = 0; i < n->n_out; i++) {
+	if (loop_check_recurse(g, g->node[n->out[i]->n[1]], check_num, level+1) < 0) {
+	    n->visited--;
+	    return -1;
+	}
+    }
+
+    n->visited--;
+
+    return 0;
+}
+
+int loop_check(dgraph_t *g) {
+    int i;
+    for (i = 0; i < g->nnodes; i++)
+	g->node[i]->visited = 0;
+
+    int check_num = INT_MAX/2;
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+
+	// Have we been here before? If so skip it.
+	if (n->pruned || n->visited)
+	    continue;
+	
+	// We have a head node, but it may link up with
+	// previously scanned head nodes.  All we care
+	// about is following this starting point doesn't
+	// get back to a node we're visiting in this cycle.
+	if (loop_check_recurse(g, n, ++check_num, 0) < 0)
+	    return -1;
+    }
+
+    return 0;
+}
+
+#else
+
 // We ensure this node is not within our previous list of visited nodes.
 static int loop_check_recurse(dgraph_t *g, node_t *n, char *visited) {
     // Simple linear list
@@ -584,6 +645,7 @@ int loop_check(dgraph_t *g) {
     free(visited);
     return 0;
 }
+#endif
 
 int add_seq(dgraph_t *g, char *seq, int len, int ref) {
     int i, j;
@@ -2698,7 +2760,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	ref->seq[ref_len + g->kmer-1] = 0;
 	memcpy(ref->seq + g->kmer-1, ref_seq, ref_len);
 	memset(ref->seq, 'N', g->kmer-1);
-	if (add_seq(g, ref->seq, 0, IS_REF) < 0) {
+	if (add_seq(g, ref->seq, 0, IS_REF) < 0 || loop_check(g)) {
 	    fprintf(stderr, "Loop when adding reference\n");
 	    graph_destroy(g);
 	    if ((kmer += 10) < MAX_KMER)
@@ -2717,7 +2779,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     //graph2dot(g, "_g.dot", 0);
 
     haps_t *cons = compute_consensus(g); 
-    if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0) {
+    if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER)
@@ -2729,6 +2791,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     // Now also merge in reference bubbles
     find_bubbles(g, 1);
+    assert(loop_check(g) == 0);
 
     //graph2dot(g, "_G.dot", 0);
 
