@@ -1184,7 +1184,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		if (!n1)
 		    n1 = g->node[start]; // if inserting to end of alignment
 		int first_ins = 1;
-		while (op--) {
+		while (op-- && x2 < np2) {
 		    //printf("I  - %2d\n", n2->id);
 
 		    if (first_ins) {
@@ -1203,7 +1203,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 			first_ins = 0;
 		    }
 
-		    if (op == 0) { // last
+		    if (op == 0 || x2 == np2-1) { // last
 			// Link n2 in to n1
 			// Link n1 out to n2
 			// Cull parent(n2) out (to n2)
@@ -1505,7 +1505,7 @@ void find_bubbles(dgraph_t *g, int use_ref) {
 		g->node[j]->visited = 0;
 
 	    if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
-		printf("Graph start at %d\n", i);
+		//printf("Graph start at %d\n", i);
 		int b = find_bubble_from2(g, i, use_ref);
 
 		if (b) {
@@ -2283,7 +2283,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 
 		// Now replay the path in order from last->n
 		np = last;
-		if (--path_ind > 0)
+		if (--path_ind > 0 && np->n_out > path[path_ind])
 		    np = g->node[np->out[path[path_ind]]->n[1]];
 		while (--path_ind >= 0) {
 		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
@@ -2337,6 +2337,8 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
 	b->core.flag |= BAM_FUNMAP;
     }
 
+    // TODO: don't replace cigar if alignment fails.
+    // Instead keep original, as likely still valid (it's against reference still)
     replace_cigar(b, cig_ind, cig_a);
     
     free(sub);
@@ -2545,6 +2547,135 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
 
 //    HashTableDestroy(hash, 0);
 //    HashTableDestroy(neighbours, 0);
+
+    return 0;
+}
+
+static unsigned char complementary_base[256] = {
+    0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,
+    16,  17,  18,  19,  20,  21,  22,  23,  24,  25,  26,  27,  28,  29,  30,  31,
+    32, '!', '"', '#', '$', '%', '&', '\'','(', ')', '*', '+', ',', '-', '.', '/',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', ';', '<', '=', '>', '?',
+    '@', 'T', 'V', 'G', 'H', 'E', 'F', 'C', 'D', 'I', 'J', 'M', 'L', 'K', 'N', 'O',
+    'P', 'Q', 'Y', 'S', 'A', 'A', 'B', 'W', 'X', 'R', 'Z', '[', '\\',']', '^', '_',
+    '`', 't', 'v', 'g', 'h', 'e', 'f', 'c', 'd', 'i', 'j', 'm', 'l', 'k', 'n', 'o',
+    'p', 'q', 'y', 's', 'a', 'a', 'b', 'w', 'x', 'r', 'z', '{', '|', '}', '~', 127,
+    128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143,
+    144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159,
+    160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
+    176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+    192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207,
+    208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223,
+    224, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234, 235, 236, 237, 238, 239,
+    240, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 251, 252, 253, 254, 255,
+};
+
+/* Reverse complements a sequence in-place */
+void complement_seq ( char *seq, int seq_len ) {
+    int i, middle, j;
+    unsigned char temp;
+
+    middle = seq_len/2;
+    for ( i = 0, j = seq_len-1; i < middle; i++, j--) {
+        temp = (unsigned char) seq[i];
+        seq[i] = complementary_base [ (unsigned char) seq[j] ];
+        seq[j] = complementary_base [ temp ];
+    }
+
+    if ( seq_len % 2 )
+	seq[middle] = complementary_base [ (unsigned char) seq[middle] ];
+}
+
+
+// Need ADAPTER
+#define ADAPTER_KMER 14
+#define ADAPTER_COUNT 10
+
+int trim_adapters(haps_t *h, int n, char *fn, int kmer) {
+    int i,j;
+    HashTable *hash;
+    hash = HashTableCreate(1024, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+
+    // expected fasta of short seqs
+    FILE *fp = fopen(fn, "r");
+    if (!fp) {
+	perror(fn);
+	return -1;
+    }
+
+    // Hash adapter file
+    char line[1024], line2[1024];
+    while (fgets(line, 1024, fp)) {
+	if (*line == '>')
+	    continue;
+	line[1023]=0;
+	int len = strlen(line)-1;
+	line[len] = 0; // trim \n
+	memcpy(line2, line, len);
+	int dir;
+	for (dir = 0; dir <= 1; dir++) {
+	    for (i = 0; i < len-kmer; i++) {
+		HashData hd;
+		hd.i = dir;
+		HashTableAdd(hash, line+i, kmer, hd, NULL);
+
+		// Neighbours
+		for (j = 0; j < kmer; j++) {
+		    line2[i+j] = 'A'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+		    line2[i+j] = 'C'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+		    line2[i+j] = 'G'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+		    line2[i+j] = 'T'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+		    line2[i+j] = line[i+j];
+		}
+	    }
+
+	    complement_seq(line, len);
+	}
+    }
+    fclose(fp);
+
+    // Trim seqs
+    for (i = 0; i < n; i++) {
+	char *seq = h[i].seq;
+	int len = strlen(seq);
+
+	int left_end = INT_MAX;
+	int right_end = INT_MIN;
+	int left_count = 0;
+	int right_count = 0;
+
+	for (j = 0; j < len-kmer; j++) {
+	    HashItem *hi;
+	    if ((hi = HashTableSearch(hash, seq+j, kmer))) {
+		switch (hi->data.i == 0) {
+		case 0: // left
+		    left_end = j+kmer-1;
+		    left_count++;
+		    break;
+
+		case 1: // right
+		    if (right_end == INT_MIN)
+			right_end = j;
+		    right_count++;
+		    break;
+		}
+		    
+		//printf("%s: %d/%d %.*s %d\n", h[i].name, j, len-kmer, kmer, seq+j, (int)hi->data.i);
+	    }
+	}
+
+	if (left_count >= ADAPTER_COUNT) {
+	    fprintf(stderr, "%s: trim left at %d: %.*s\n", h[i].name, left_end, left_end, h[i].seq);
+	    memset(h[i].seq, 'N', left_end);
+	}
+	if (right_count >= ADAPTER_COUNT) {
+	    fprintf(stderr, "%s: trim right at %d: %.*s\n", h[i].name, right_end, len-right_end, h[i].seq+right_end);
+	    memset(h[i].seq+right_end, 'N', len-right_end);
+	}
+    }
+
+    HashTableDestroy(hash, 0);
+    fflush(stdout);
 
     return 0;
 }
@@ -2826,6 +2957,8 @@ int main(int argc, char **argv) {
     correct_errors(haps, nhaps, 25, 1);
     correct_errors(haps, nhaps, 20, 1);
     correct_errors(haps, nhaps, 14, 1);
+    //trim_adapters(haps, nhaps, "/nfs/srpipe_references/adapters/adapters.fasta", 14);
+    trim_adapters(haps, nhaps, "adapter.fa", 14);
 
  bigger_kmer:
 
