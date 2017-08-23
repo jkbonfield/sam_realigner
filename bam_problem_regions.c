@@ -404,7 +404,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     i = 0;
     while (bi) {
 	next = RB_NEXT(bam_sort, bl, bi);
-	if (bi->b == ba[i]) {
+	if (i < count && bi->b == ba[i]) {
 	    // Could optimise this, but simpler to remove, update, insert.
 	    RB_REMOVE(bam_sort, bl, bi);
 	    bi->b->core.pos = new_pos[i];
@@ -880,6 +880,8 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 	fprintf(stderr, "Wrote %"PRId64" reads\n\n", cd.count_out);
 	return 1;
     }
+
+    free(cons);
 
     return 0;
 }

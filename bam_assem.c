@@ -2808,7 +2808,10 @@ haps_t *bam2haps(bam1_t **bams, int nrecs) {
     return haps;
 }
 
-free_haps(haps_t *h, int n) {
+void free_haps(haps_t *h, int n) {
+    if (!h)
+	return;
+
     int i;
 
     for (i = 0; i < n; i++)
@@ -2838,9 +2841,10 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
 
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *ref_seq, int ref_len, int ref_start) {
-    int i, kmer = KMER;
+    int i, kmer = KMER, ret = -1;
     dgraph_t *g;
-    haps_t *haps = NULL;
+    haps_t *haps = NULL, *cons = NULL;
+    haps_t *ref = NULL, *ref_ = NULL;
 
     dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start);
 
@@ -2895,10 +2899,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	fprintf(stderr, "Loop detected, increasing kmer\n");
 
 	graph_destroy(g);
+	g = NULL;
     }
     if (kmer >= MAX_KMER) {
 	fprintf(stderr, "No suitable kmer found\n");
-	return -1;
+	goto err;
     }
     fprintf(stderr, "Using kmer %d\n", kmer);
 
@@ -2906,11 +2911,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     int shift = bams[0]->core.pos+1;
 
-    haps_t *ref = NULL, *ref_ = NULL;
     if (ref_seq) {
 	ref_ = ref = malloc(sizeof(*ref));
 	if (!ref)
-	    return -1;
+	    goto err;
+	fprintf(stderr, "Alloc %p\n", ref);
 	ref->name = "Ref";
 	ref->pos = ref_start;
 	fprintf(stderr, "ref=%.*s\n", ref_len, ref_seq);
@@ -2922,9 +2927,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	if (add_seq(g, ref->seq, 0, IS_REF) < 0 || loop_check(g, 0)) {
 	    fprintf(stderr, "Loop when adding reference\n");
 	    graph_destroy(g);
-	    if ((kmer += 10) < MAX_KMER)
+	    if ((kmer += 10) < MAX_KMER) {
+		free_haps(ref_, 1);
 		goto bigger_kmer;
-	    return 1;
+	    }
+	    g = NULL; goto err;
 	}
 
 	shift = ref_start + 1;
@@ -2937,13 +2944,14 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     //graph2dot(g, "_g.dot", 0);
 
-    haps_t *cons = compute_consensus(g); 
+    cons = compute_consensus(g); 
     if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g, 0)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER)
 	    goto bigger_kmer;
-	return -1;
+	g = NULL;
+	goto err;
     }
     if (!ref)
 	ref = cons;
@@ -2965,16 +2973,18 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     for (i = 0; i < nhaps; i++) {
         if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i]) < 0)
-	    return -1;
+	    goto err;
     }
 
+    ret = 0;
+ err:
     graph_destroy(g);
     free_haps(haps, nhaps);
     free_haps(cons, 1);
-    if (ref_)
-	free_haps(ref_, 1);
+    fprintf(stderr, "Free %p\n", ref_);
+    free_haps(ref_, 1);
 
     fprintf(stderr, "Finished.\n");
 
-    return 0;
+    return ret;
 }
