@@ -30,6 +30,14 @@ appropriate location within the string.
  *   to match.  Instead align back to ref.
  *
  * - Fix eg4h/H.  We could try merging longest bubbles before shorter ones?
+ *
+ * - Use overlap graph instead?  Ideally every node should represent 1 bp,
+ *   not 1 kmer. We can still have hash table pointing to nodes to permit
+ *   seq to node discovery, but it's important to have the same number of
+ *   nodes as bases when doing bubble alignment.  Right now a bubble of
+ *   length N has N-K nodes to merge.  This can be problematic to map that
+ *   sequence alignment onto the nodes and in turn onto the cigar
+ *   re-generation.
  */
 
 #include <stdio.h>
@@ -883,9 +891,9 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     node_t **path2 = malloc(g->nnodes * sizeof(node_t *));
     int np1 = 0, np2 = 0, i, j;
 
-    fprintf(stderr, "Node_common_ancestor %d<-%d %d<-%d\n",
-	    n_end->id, p1->id,
-	    n_end->id, p2->id);
+//    fprintf(stderr, "Node_common_ancestor %d<-%d %d<-%d\n",
+//	    n_end->id, p1->id,
+//	    n_end->id, p2->id);
 
     // Backtrack up p1 marking set.
     node_t *n = p1;
@@ -1242,7 +1250,9 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    }
 	}
 
-	// gap at end
+	// gap at end.
+	// TODO: Consider just culling these nodes so cigar generation turns
+	// into soft-clips.  
 	while (x1 < np1) {
 	    // Already in path1 only, nothing to do with path2
 	    node_t *n1 = path1[x1];
@@ -1251,27 +1261,40 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	    n1 = path1[x1++];
 	}
 
+	// TODO: Consider just culling these nodes so cigar generation turns
+	// into soft-clips.  
 	node_t *n1 = g->node[start];
 	node_t *n2 = path2[x2];
-	while (x2 < np2) {
-	    // Insertion in path2, link into path1
+	if (x2 < np2) {
+	    // Insertion of remainder of path2 (1 or more nodes)
+	    // into path1 between l1 and n1.
+	    // The path2 nodes already form a link, so we only need
+	    // to concern ourselves with the head of the path
+	    // path2[np2-1] and the current tail path2[x2] (n2).
+	    // Note these may be the same node if there is only 1 left.
+
 	    //printf("i  - %2d\n", n2->id);
 
-	    n2->in[0]->n[1] = l1->in[0]->n[1]; // FIXME: plus edge hash
-	    l1->in[0]->n[1] = n2->id;          // FIXME: plus edge hash
-	    for (j = 0; j < n1->n_out; j++)
-		if (n1->out[j]->n[1] == n2->id)
-		    break;
-	    if (j == n1->n_out)
-		move_edge_out(g, n1, l1, n2);
+	    // tail:
+	    // link n2 out to l1 in
 	    for (i = 0; i < n2->n_out; i++)
 		if (n2->out[i]->n[1] == l1->id)
 		    break;
 	    if (i == n2->n_out)
 		move_edge_out(g, n2, l2, l1);
-	    l1 = l2 = n2;
-	    n2->bases[g->kmer-1][4]++;
-	    n2 = path1[x2++];
+	    for (i = 0; i < l1->n_in; i++)
+		if (l1->in[i]->n[1] == n1->id)
+		    l1->in[i]->n[1] = n2->id; // FIXME: plus edge hash?
+
+	    x2 = np2-1;
+	    n2 = path2[x2];
+	    // tail:
+	    // link n1 out to n2 in.
+	    for (j = 0; j < n1->n_out; j++)
+		if (n1->out[j]->n[1] == n2->id)
+		    break;
+	    if (j == n1->n_out)
+		move_edge_out(g, n1, l1, n2);
 	}
     }
     
@@ -1422,8 +1445,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 
 	    if (n->visited) {
 		int merge_id = n->in[0]->n[1];
-		printf("Bubble detected with node %d (%d, %d)\n",
-		       n->id, merge_id, pn->id);
+		//printf("Bubble detected with node %d (%d, %d)\n", n->id, merge_id, pn->id);
 		graph2dot(g, "before.dot", 0);
 
 		//rewind_paths(g, &head, merge_id, n);
