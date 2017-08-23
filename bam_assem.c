@@ -522,8 +522,6 @@ int decr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int ref) 
 	    if (n2->in[i]->n[1] != n1->id)
 		n2->in[j++] = n2->in[i];
 	n2->n_in = j;
-
-	free(e);
     }
 
     return 0;
@@ -1432,6 +1430,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 		// a new round.  (Brute force approach.)
 
 		// Taking the easy route - bail out and restart!
+		//fprintf(stderr, "visited; err\n");
 		goto err;
 	    }
 
@@ -1456,6 +1455,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
     path_t *p, *pnext;
  err:
     pnext = NULL;
+    //fprintf(stderr, "head=%p, next=%p\n", head, head?head->next:NULL);
     for (p = head; p; p = pnext) {
 	pnext = p->next;
 	path_destroy(p);
@@ -2051,7 +2051,7 @@ static void replace_cigar(bam1_t *b, int n, uint32_t *cigar)
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
 int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos) {
     int i;
-    node_t *n, *last = NULL;
+    node_t *n = NULL, *last = NULL;
     int cig_op = 999, cig_len = 0;
     int first_go = 1;
     int seq_start = 0;

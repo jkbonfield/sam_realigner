@@ -526,8 +526,6 @@ int decr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int ref) 
 	    if (n2->in[i]->n[1] != n1->id)
 		n2->in[j++] = n2->in[i];
 	n2->n_in = j;
-
-	free(e);
     }
 
     return 0;
@@ -2139,7 +2137,7 @@ static void replace_cigar(bam1_t *b, int n, uint32_t *cigar)
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
 int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq) {
     int i;
-    node_t *n, *last = NULL;
+    node_t *n = NULL, *last = NULL;
     int cig_op = 999, cig_len = 0;
     int first_go = 1;
     int seq_start = 0;
