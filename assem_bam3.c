@@ -219,6 +219,8 @@ typedef struct {
 
     node_t **node;
     int nnodes, anodes;  // number used and allocated
+    edge_t **edge;
+    int nedges, aedges;
 
     HashTable *node_hash;  // "seq" -> node
     HashTable *edge_hash;  // id[2] -> edge
@@ -283,6 +285,17 @@ void graph_destroy(dgraph_t *g) {
 
     if (g->spool)
 	string_pool_destroy(g->spool);
+
+    int i;
+    for (i = 0; i < g->nnodes; i++) {
+	free(g->node[i]->hi);
+	free(g->node[i]);
+    }
+    free(g->node);
+
+    for (i = 0; i < g->nedges; i++)
+	free(g->edge[i]);
+    free(g->edge);
 
     free(g);
 }
@@ -381,6 +394,19 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
     if (!edge)
 	return NULL;
 
+    // For simplicity of deallocation
+    if (g->nedges+1 >= g->aedges) {
+	int a = g->aedges ? g->aedges*2 : 1024;
+	edge_t **e = realloc(g->edge, a * sizeof(*e));
+	if (!e) {
+	    free(edge);
+	    return NULL;
+	}
+	g->edge = e;
+	g->aedges = a;
+    }
+    g->edge[g->nedges++] = edge;
+
     // Add edge itself
     if (n1->n_out >= MAX_EDGE)
 	return NULL;
@@ -397,6 +423,7 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
     edge_t *i_edge = malloc(sizeof(*edge));
     if (!i_edge)
 	return NULL;
+    g->edge[g->nedges++] = i_edge;
     if (n1->n_in >= MAX_EDGE)
 	return NULL;
     n2->in[n2->n_in++] = i_edge;
@@ -726,6 +753,7 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 
 	if (g->node[e->n[1]]->visited == counter) {
 	    // cull edge
+	    free(s);
 	    return -1; // loop
 	}
 
@@ -1302,6 +1330,8 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     free(v1);
     free(v2);
     free(vn);
+    free(path1);
+    free(path2);
 
     {
 	static int n=0;
@@ -1362,6 +1392,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
     int i, v;
     path_t *head = path_create(p_id++);
     int active = 1;
+    int ret = 1;
 
     // Initialise with one path
     //printf("find_bubble_from2 node %d\n", id);
@@ -1455,10 +1486,11 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 
 		// FIXME: merge forks.
 		// Test: just cull one instead.
-		if (lp)
+		if (lp) 
 		    lp->next = pnext;
 		else
 		    head->next = pnext;
+		if (p != head) path_destroy(p);
 
 		if(0) {
 		    path_t *p;
@@ -1487,8 +1519,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 		// a new round.  (Brute force approach.)
 
 		// Taking the easy route - bail out and restart!
-		
-		return 1;
+		goto err;
 	    }
 
 	    // Ensure parent node is always incoming[0].
@@ -1508,7 +1539,16 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 	}
     }
 
-    return 0;
+    ret = 0;
+    path_t *p, *pnext;
+ err:
+    pnext = NULL;
+    for (p = head; p; p = pnext) {
+	pnext = p->next;
+	path_destroy(p);
+    }
+
+    return ret;
 }
 
 void find_bubbles(dgraph_t *g, int use_ref) {
@@ -2944,6 +2984,14 @@ haps_t *bam2haps(bam1_t *bams, int nrecs) {
     return haps;
 }
 
+free_haps(haps_t *h, int n) {
+    int i;
+
+    for (i = 0; i < n; i++)
+	free(h[i].seq);
+    free(h);
+}
+
 int main(int argc, char **argv) {
     int i, kmer = KMER;
     dgraph_t *g;
@@ -3022,10 +3070,10 @@ int main(int argc, char **argv) {
 
     int shift = bams[0].core.pos+1;
 
-    haps_t *ref = NULL;
+    haps_t *ref = NULL, *ref_ = NULL;
     if (argc > 2) {
 	fprintf(stderr, "===> Adding reference\n");
-	ref = load_fasta(argv[2], 0);
+	ref_ = ref = load_fasta(argv[2], 0);
 	int ref_len = strlen(ref->seq);
 	ref->seq = realloc(ref->seq, ref_len + g->kmer-1 + 1);
 	ref->seq[ref_len + g->kmer-1] = 0;
@@ -3119,6 +3167,16 @@ int main(int argc, char **argv) {
 	return 1;
 
     graph_destroy(g);
+    for (i = 0; i < nhaps; i++)
+	free(bams[i].data); // Ugh! We need a bam_free function in htslib
+    free(bams);
+    bam_hdr_destroy(hdr);
+    free_haps(haps, nhaps);
+    free_haps(cons, 1);
+    if (ref_) {
+	free(ref_->name);
+	free_haps(ref_, 1);
+    }
 
     fprintf(stderr, "Finished.\n");
 
