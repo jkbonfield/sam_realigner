@@ -958,7 +958,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		p++;
 	    } else if (op < 0) {
 		// Already in path1 only, nothing to do with path2;
-		while (op++) {
+		while (op++ && x1 < np1) {
 		    memcpy(vn[p], v1[x1++], sizeof(v1[p]));
 		    vn[p][4]++;
 		    p++;
