@@ -157,13 +157,14 @@ typedef struct haps {
     int   pos;
     char *seq;
     char *name;
+    uint8_t *qual; // not our copy; do not free
 } haps_t;
 
 //#include "hap2s.h"
 //#include "haps.h"
 
 #ifndef KMER
-#  define KMER 3
+#  define KMER 20
 #endif
 
 #ifndef MAX_KMER
@@ -1118,7 +1119,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		l2 = n2;
 	    } else if (op < 0) {
 		// Already in path1 only, nothing to do with path2
-		while (op++) {
+		while (op++ && x1 < np1) {
 		    //printf("D %2d  -\n", n1->id);
 		    //n1->bases[g->kmer-1][4]++;
 		    memcpy(n1->bases, vn[p++], 5*sizeof(int));
@@ -1800,6 +1801,11 @@ void validate_graph(dgraph_t *g) {
     }
 }
 
+#if 1
+int graph2dot(dgraph_t *g, char *fn, int wrap) {
+    return 0;
+}
+#else
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     FILE *fp = stdout;
 
@@ -1932,6 +1938,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 	return 0;
 }
+#endif
 
 typedef struct hseq {
     struct hseq *next;
@@ -2417,7 +2424,7 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
 // min_count, but high coverage or lots of low complexity data won't
 // increase it.
 HashTable *kmer_hash = NULL, *neighbours = NULL;
-int correct_errors(haps_t *h, int n, int errk, int min_count) {
+int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     //HashTable *hash, *neighbours;
     HashItem *hi;
     int i, counth = 0, countw = 0;
@@ -2494,6 +2501,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
     int nc = 0;
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
+	char *qual = h[i].qual;
 	char *s2 = strdup(seq);
 	int len = strlen(seq), j;
 #define EDGE_DIST 3
@@ -2510,7 +2518,19 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
 		continue;
 	    }
 
-	    memcpy(s2+j, hi2->data.p, errk);
+	    //memcpy(s2+j, hi2->data.p, errk);
+
+	    int k;
+	    for (k = 0; k < errk; k++)
+		if (s2[j+k] != ((char *)hi2->data.p)[k])
+		    break;
+	    if (k == errk)
+		continue;
+
+	    if (qual && min_qual && qual[k] >= min_qual)
+		continue;
+
+	    s2[j+k] = ((char *)hi2->data.p)[k];
 	    nc++;
 	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
 	}
@@ -2523,7 +2543,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
 //    HashTableDestroy(hash, 0);
 //    HashTableDestroy(neighbours, 0);
 
-    return 0;
+    return nc;
 }
 
 static unsigned char complementary_base[256] = {
@@ -2655,20 +2675,20 @@ int trim_adapters(haps_t *h, int n, char *fn, int kmer) {
     return 0;
 }
 
-// Also makes them writeable, but leaks the memory later on if we don't free.
-void fix_seqs(haps_t *h, int n) {
-    int i;
-    for (i = 0; i < n; i++) {
-	char *s = strdup(h[i].seq);
-	int j, k, l = strlen(s);
-	for (j = k = 0; j < l; j++) {
-	    if (s[j] != '*')
-		s[k++] = toupper(s[j]);
-	}
-	s[k] = 0;
-	h[i].seq = s; // leads to memleak
-    }
-}
+// // Also makes them writeable, but leaks the memory later on if we don't free.
+// void fix_seqs(haps_t *h, int n) {
+//     int i;
+//     for (i = 0; i < n; i++) {
+// 	char *s = strdup(h[i].seq);
+// 	int j, k, l = strlen(s);
+// 	for (j = k = 0; j < l; j++) {
+// 	    if (s[j] != '*')
+// 		s[k++] = toupper(s[j]);
+// 	}
+// 	s[k] = 0;
+// 	h[i].seq = s; // leads to memleak
+//     }
+// }
 
 // Computes a consensus via a greedy approach.
 // Find the node with the highest count.
@@ -2777,6 +2797,7 @@ haps_t *compute_consensus(dgraph_t *g) {
     h->name = "cons";
     h->seq = seq.s;
     h->pos = 0;
+    h->qual = NULL;
 
     //printf("Cons = %s\n", seq.s);
 
@@ -2799,6 +2820,7 @@ haps_t *bam2haps(bam1_t **bams, int nrecs) {
 	haps[i].seq  = malloc(b->core.l_qseq+1);
 	if (!haps[i].seq)
 	    return NULL; // leak on failure
+	haps[i].qual = bam_get_qual(b);
 
 	for (j = 0; j < b->core.l_qseq; j++)
 	    haps[i].seq[j] = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, j)];
@@ -2820,6 +2842,7 @@ void free_haps(haps_t *h, int n) {
 }
 
 static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_len, int ref_start) {
+#if 1
     samFile *fp;
     int i;
 
@@ -2837,6 +2860,7 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
     FILE *f = fopen("_tmp.ref", "w");
     fprintf(f, ">%d\n%.*s\n", ref_start, ref_len, ref);
     fclose(f);
+#endif
 }
 
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
@@ -2864,10 +2888,13 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 //    for (i = 0; i < 3; i++)
 //	correct_errors(haps, nhaps, ERRK, 3);
 
-    correct_errors(haps, nhaps, 27, 3);
-    correct_errors(haps, nhaps, 25, 1);
-    correct_errors(haps, nhaps, 20, 1);
-    correct_errors(haps, nhaps, 14, 1);
+    correct_errors(haps, nhaps, 27, 3, 0);
+    correct_errors(haps, nhaps, 25, 1, 0);
+    correct_errors(haps, nhaps, 20, 1, 0);
+    correct_errors(haps, nhaps, 14, 1, 0);
+//    for (i = 0; i < 3; i++)
+//	if (correct_errors(haps, nhaps, 14, 2, 20) <= 0)
+//	    break;
     //trim_adapters(haps, nhaps, "/nfs/srpipe_references/adapters/adapters.fasta", 14);
     trim_adapters(haps, nhaps, "adapter.fa", ADAPTER_KMER);
 
@@ -2909,6 +2936,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     //graph2dot(g, "f.dot", 0);
 
+    // Merge bubbles excluding reference
+    find_bubbles(g, 0);
+    assert(loop_check(g, 0) == 0);
+    //graph2dot(g, "_F.dot", 0);
+
     int shift = bams[0]->core.pos+1;
 
     if (ref_seq) {
@@ -2936,11 +2968,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
 	shift = ref_start + 1;
     }
-
-    //graph2dot(g, "_F.dot", 0);
-
-    // Merge bubbles excluding reference
-    find_bubbles(g, 0);
 
     //graph2dot(g, "_g.dot", 0);
 

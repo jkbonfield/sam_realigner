@@ -673,7 +673,7 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 	    if (mv < freq['T']) mv = freq[call = 'T'];
 	}
 	//fprintf(stderr, "%d %c\n", pos, call);
-	if (cons_sz < pos - start_cons+1) {
+	while (cons_sz < pos - start_cons+1) {
 	    cons_sz *= 2;
 	    cons = realloc(cons, cons_sz);
 	    if (!cons)

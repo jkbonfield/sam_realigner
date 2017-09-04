@@ -210,6 +210,8 @@ FastInt tb, te; char topr, botr, lc, rc;
   midj = 0;
   type = 1;
   for (j = 0; j <= N; j++)
+    // >= right align gap
+    // >  left align gap
     if ((c = CD[j][0] + RS[j][0]) >= midc)
       if (c > midc || CD[j][0] != CD[j][1] && RS[j][0] == RS[j][1])
         { midc = c;

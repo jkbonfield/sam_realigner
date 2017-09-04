@@ -150,6 +150,7 @@ int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
 
 //    printf("Score=%d\n", score);
 //    display_ss(seq1, seq2, len1, len2, S, 0, 0);
+//    fflush(stdout);
 
     free(seq1);
     free(seq2);
@@ -161,6 +162,7 @@ typedef struct haps {
     int   pos;
     char *seq;
     char *name;
+    uint8_t *qual; // not our copy; do not free
 } haps_t;
 
 //#include "hap2s.h"
@@ -1989,7 +1991,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 #define MAX_GRAPH_KEY 100
 
-#if 0
+#if 1
 	// Hash key -> node map
 	HashIter *iter = HashTableIterCreate();
 	HashItem *hi;
@@ -2502,7 +2504,7 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
 // min_count, but high coverage or lots of low complexity data won't
 // increase it.
 HashTable *kmer_hash = NULL, *neighbours = NULL;
-int correct_errors(haps_t *h, int n, int errk, int min_count) {
+int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     //HashTable *hash, *neighbours;
     HashItem *hi;
     int i, counth = 0, countw = 0;
@@ -2579,6 +2581,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
     int nc = 0;
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
+	char *qual = h[i].qual;
 	char *s2 = strdup(seq);
 	int len = strlen(seq), j;
 #define EDGE_DIST 3
@@ -2595,7 +2598,19 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
 		continue;
 	    }
 
-	    memcpy(s2+j, hi2->data.p, errk);
+	    //memcpy(s2+j, hi2->data.p, errk);
+
+	    int k;
+	    for (k = 0; k < errk; k++)
+		if (s2[j+k] != ((char *)hi2->data.p)[k])
+		    break;
+	    if (k == errk)
+		continue;
+
+	    if (qual && min_qual && qual[k] >= min_qual)
+		continue;
+
+	    s2[j+k] = ((char *)hi2->data.p)[k];
 	    nc++;
 	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
 	}
@@ -2608,7 +2623,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count) {
 //    HashTableDestroy(hash, 0);
 //    HashTableDestroy(neighbours, 0);
 
-    return 0;
+    return nc;
 }
 
 static unsigned char complementary_base[256] = {
@@ -2740,20 +2755,20 @@ int trim_adapters(haps_t *h, int n, char *fn, int kmer) {
     return 0;
 }
 
-// Also makes them writeable, but leaks the memory later on if we don't free.
-void fix_seqs(haps_t *h, int n) {
-    int i;
-    for (i = 0; i < n; i++) {
-	char *s = strdup(h[i].seq);
-	int j, k, l = strlen(s);
-	for (j = k = 0; j < l; j++) {
-	    if (s[j] != '*')
-		s[k++] = toupper(s[j]);
-	}
-	s[k] = 0;
-	h[i].seq = s; // leads to memleak
-    }
-}
+// // Also makes them writeable, but leaks the memory later on if we don't free.
+// void fix_seqs(haps_t *h, int n) {
+//     int i;
+//     for (i = 0; i < n; i++) {
+// 	char *s = strdup(h[i].seq);
+// 	int j, k, l = strlen(s);
+// 	for (j = k = 0; j < l; j++) {
+// 	    if (s[j] != '*')
+// 		s[k++] = toupper(s[j]);
+// 	}
+// 	s[k] = 0;
+// 	h[i].seq = s; // leads to memleak
+//     }
+// }
 
 // Computes a consensus via a greedy approach.
 // Find the node with the highest count.
@@ -2862,6 +2877,7 @@ haps_t *compute_consensus(dgraph_t *g) {
     h->name = "cons";
     h->seq = seq.s;
     h->pos = 0;
+    h->qual = NULL;
 
     printf("Cons = %s\n", seq.s);
 
@@ -2917,6 +2933,7 @@ haps_t *load_fasta(char *fn, int *nhaps) {
 	    line_start++;
 	h[nh].seq = strdup(line_start);
 	h[nh].pos = 0;
+	h[nh].qual = NULL;
 
 	nh++;
     }
@@ -2973,6 +2990,7 @@ haps_t *bam2haps(bam1_t *bams, int nrecs) {
 	haps[i].seq  = malloc(b->core.l_qseq+1);
 	if (!haps[i].seq)
 	    return NULL; // leak on failure
+	haps[i].qual = bam_get_qual(b);
 
 	for (j = 0; j < b->core.l_qseq; j++)
 	    haps[i].seq[j] = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, j)];
@@ -3021,10 +3039,13 @@ int main(int argc, char **argv) {
 //    for (i = 0; i < 3; i++)
 //	correct_errors(haps, nhaps, ERRK, 3);
 
-    correct_errors(haps, nhaps, 27, 3);
-    correct_errors(haps, nhaps, 25, 1);
-    correct_errors(haps, nhaps, 20, 1);
-    correct_errors(haps, nhaps, 14, 1);
+    correct_errors(haps, nhaps, 27, 3, 0);
+    correct_errors(haps, nhaps, 25, 0, 0);
+    correct_errors(haps, nhaps, 20, 0, 0);
+    //correct_errors(haps, nhaps, 14, 1, 0);
+    for (i = 0; i < 3; i++)
+	if (correct_errors(haps, nhaps, 14, 2, 20) <= 0)
+	    break;
     //trim_adapters(haps, nhaps, "/nfs/srpipe_references/adapters/adapters.fasta", 14);
     trim_adapters(haps, nhaps, "adapter.fa", 14);
 
@@ -3066,6 +3087,10 @@ int main(int argc, char **argv) {
     graph2dot(g, "f.dot", 0);
     assert(loop_check(g,0) == 0);
 
+    // Merge bubbles excluding reference
+    find_bubbles(g, 0);
+    assert(loop_check(g,0) == 0);
+
     int shift = bams[0].core.pos+1;
 
     haps_t *ref = NULL, *ref_ = NULL;
@@ -3091,9 +3116,9 @@ int main(int argc, char **argv) {
     graph2dot(g, "F.dot", 0);
     assert(loop_check(g,0) == 0);
 
-    // Merge bubbles excluding reference
-    find_bubbles(g, 0);
-    assert(loop_check(g,0) == 0);
+//    // Merge bubbles excluding reference
+//    find_bubbles(g, 0);
+//    assert(loop_check(g,0) == 0);
 
     graph2dot(g, "g.dot", 0);
 
