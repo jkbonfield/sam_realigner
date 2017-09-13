@@ -2586,6 +2586,11 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		cig_op = BAM_CSOFT_CLIP;
 	    }
 	    //fprintf(stderr, "%d,%d: ins at %d, last %d, last_ins %d\n", n->id, last->id, n->ins, last->ins, last_ins);
+	} else if (cig_op == BAM_CINS) {
+	    // insertion and no node means we ran out part way.  Change to soft-clip
+	    // as it's likely not an insertion at all, just a region with no
+	    // alignment to ref.
+	    cig_op = BAM_CSOFT_CLIP;
 	}
 
     fail:
