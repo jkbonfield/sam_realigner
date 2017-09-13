@@ -34,6 +34,12 @@ appropriate location within the string.
  *   to match.  Instead align back to ref.
  *
  * - Fix eg4h/H.  We could try merging longest bubbles before shorter ones?
+ *
+ * - Sanitise edges.  Why in and out have separate edges structures?
+ *   Would make sense for n1->n2 edge to have n1->out[?] == n2->in[?] == edge.
+ *   In this case edge->n[0] == n1 and edge->n[1] == n2.  Right now however
+ *   n[0] is always <this node> and n[1] is always <other node>, which forces
+ *   having two edge structs.
  */
 
 #include <stdio.h>
@@ -2863,7 +2869,7 @@ void complement_seq ( char *seq, int seq_len ) {
 #define ADAPTER_KMER 14
 #define ADAPTER_COUNT 10
 
-int trim_adapters(haps_t *h, int n, char *fn, int kmer) {
+int trim_adapters(haps_t *h, int n, char *fn, int kmer, int min_qual) {
     int i,j;
     HashTable *hash;
     hash = HashTableCreate(1024, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
@@ -2943,6 +2949,22 @@ int trim_adapters(haps_t *h, int n, char *fn, int kmer) {
 	if (right_count >= ADAPTER_COUNT) {
 	    fprintf(stderr, "%s: trim right at %d: %.*s\n", h[i].name, right_end, len-right_end, h[i].seq+right_end);
 	    memset(h[i].seq+right_end, 'N', len-right_end);
+	}
+
+	for (j = 0; j < len; j++) {
+	    if (h[i].qual[j] < min_qual)
+		seq[j] = 'N';
+	    //else if (j == len-1 || h[i].qual[j+1] >= min_qual)
+	    else
+		break;
+	}
+
+	for (j = len-1; j >= 0; j--) {
+	    if (h[i].qual[j] < min_qual)
+		seq[j] = 'N';
+	    //else if (j == 0 || h[i].qual[j-1] >= min_qual)
+	    else
+		break;
 	}
     }
 
@@ -3169,11 +3191,12 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     correct_errors(haps, nhaps, 25, 1, 0);
     correct_errors(haps, nhaps, 20, 1, 0);
     correct_errors(haps, nhaps, 14, 1, 0);
-//    for (i = 0; i < 3; i++)
-//	if (correct_errors(haps, nhaps, 14, 2, 20) <= 0)
+//    for (i = 0; i < 10; i++)
+//	if (correct_errors(haps, nhaps, 14, 2, 5) <= 0)
 //	    break;
     //trim_adapters(haps, nhaps, "/nfs/srpipe_references/adapters/adapters.fasta", 14);
-    trim_adapters(haps, nhaps, "adapter.fa", ADAPTER_KMER);
+    // Also trim low quality terminal bases
+    trim_adapters(haps, nhaps, "adapter.fa", ADAPTER_KMER, 10);
 
  bigger_kmer:
 
