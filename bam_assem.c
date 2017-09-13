@@ -116,13 +116,35 @@ void init_X128_score(int mis, int mat) {
 	X128[tolower("ACGT"[i])]["ACGT"[i]] = mat/2-1;
 	X128[tolower("ACGT"[i])][tolower("ACGT"[i])] = mat/2-1;
     }
+
+    for (i = 0; i < 3; i++) {
+	X128['A'][tolower("MRW"[i])] = X128[tolower("MRW"[i])]['A'] = mis/2;
+	X128['C'][tolower("MSY"[i])] = X128[tolower("MSY"[i])]['C'] = mis/2;
+	X128['G'][tolower("RSK"[i])] = X128[tolower("RSK"[i])]['G'] = mis/2;
+	X128['T'][tolower("WYK"[i])] = X128[tolower("WYK"[i])]['T'] = mis/2;
+    }
+
+    // Base vs pad is bad, worse than opening a new gap.
+    for (i = 0; i < 11; i++) {
+	X128["AMRWCSYGKTN"[i]]['-'] = X128['-'][tolower("AMRWCSYGKTN"[i])] = mis*2;
+	X128[tolower("AMRWCSYGKTN"[i])]['-'] = X128['-']["AMRWCSYGKTN"[i]] = mis*2;
+    }
 }
 
 // Convert a 6-way ACGT*N vector to X128 lookup value.
 int vec2X(int V[6]) {
+#if 0
     char b = "NTGKCYSBAWRDMHVN"[(!!V[0]<<3)+(!!V[1]<<2)+(!!V[2]<<1)+(!!V[3]<<0)];
     if (V[4]>0) b = tolower(b);
     return b;
+#else
+    int t=V[0]+V[1]+V[2]+V[3];
+    int T=t>>2;
+    char b = "NTGKCYSBAWRDMHVN"[((V[0]>T)<<3)+((V[1]>T)<<2)+((V[2]>T)<<1)+((V[3]>T)<<0)];
+    if (V[4]>0) b = tolower(b);
+    if (t < V[4]/4) b = '-';
+    return b;
+#endif
 }
 
 char *vec2seq(int (*v)[5], int len) {
@@ -179,6 +201,9 @@ typedef struct haps {
 #ifndef MAX_EDGE
 #  define MAX_EDGE 16
 #endif
+
+#define GAP_OPEN 3
+#define GAP_EXTEND 1
 
 struct edge;
 
@@ -917,7 +942,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	memcpy(v2[len2++], l->bases[i], 5*sizeof(int));
 
     int *S = malloc((len1+len2)*sizeof(int));
-    align_vv(v1, v2, len1, len2, 3, 1, S, 0,0,0,0);
+    align_vv(v1, v2, len1, len2, GAP_OPEN, GAP_EXTEND, S, 0,0,0,0);
 
     // Remove path2 from start/end nodes.
     n = g->node[start];
@@ -1113,6 +1138,15 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		//printf("Merge pos %d with %d\n", n1->pos, n2->pos);
 
 		n2->pruned = 1;
+		for (j = 0; j < n2->n_out; j++) {
+		    node_t *t = g->node[n2->out[j]->n[1]];
+		    int l;
+		    for (l = k = 0; k < t->n_in; k++) {
+			if (t->in[k]->n[1] != n2->id)
+			    t->in[l++] = t->in[k];
+		    }
+		    t->n_in = l;
+		}
 		first = 0;
 		x1++, x2++;
 		l1 = n1;
@@ -1540,7 +1574,7 @@ void find_insertions(dgraph_t *g) {
 	if (n->pos == INT_MIN)
 	    continue;
 
-	int pass, ins_count = 0, end_pos;
+	int pass, ins_count = 0, end_pos = 0;
 	for (pass = 0; pass < 2; pass++) {
 	    node_t *nr_1 = n;    // last-ref and 1st-insertion
 	    node_t *ni_1 = NULL;
@@ -1706,6 +1740,161 @@ void tag_hairs(dgraph_t *g) {
     }    
 }
 
+
+#if 0
+// Merge nodes n1 onto n2, with relationships n1->c1 and n2->c2.
+// NB: c2 is unrequired, so not specified as an argument.
+// We are culling node n1, so c1 incoming is removed.
+// (FIXME: see dup1 comments regarding potential duplicated code).
+int merge_head_node(dgraph_t *g, node_t *n1, node_t *n2, node_t *c1) {
+    int i, j;
+
+    if (n2->n_in + n1->n_in > MAX_EDGE || n2->n_out + n1->n_out > MAX_EDGE)
+	return -1;
+    HashItem **hi_ = realloc(n2->hi, (n2->n_hi + n1->n_hi) * sizeof(*n2->hi));
+    if (!hi_)
+	return -1;
+    n2->hi = hi_;
+
+    // Discard n1, keeping n2
+    n1->pruned = 1;
+
+    // various counts
+    for (j = 0; j < g->kmer; j++)
+	for (i = 0; i < 5; i++)
+	    n2->bases[j][i] += n1->bases[j][i];
+    n2->count += n1->count;
+
+    // Migrate hash keys pointing to n1 to n2
+    for (i = 0, j = n2->n_hi; i < n1->n_hi; i++, j++) {
+	n2->hi[j] = n1->hi[i];
+	n2->hi[j]->data.p = n2;
+    }
+
+    // Merge in[] arrays; no loops exist, so a pure tree.
+    for (i = 0; i < n1->n_in; i++) {
+	int in1 = n1->in[i]->n[1];
+	// Unnecessary loop - here for bug checking only.
+	for (j = 0; j < n2->n_in; j++) {
+	    if (in1 == n2->in[j]->n[1])
+		break;
+	}
+	if (j != n2->n_in)
+	    abort(); // NB: shouldn't happen; implies not a tree.
+
+	// n1's parent out edge now links to n2 instead of n1
+	move_edge_out(g, g->node[in1], n1, n2);
+
+	// Add n2's in edge to n1.  n2 has it, but is defunct.
+	n1->in[i]->n[0] = n2->id;
+	n2->in[n2->n_in++] = n1->in[i];
+    }
+
+    // Cull c1's in edge from n1.
+    for (i = j = 0; i < c1->n_in; i++) {
+	if (c1->in[i]->n[1] == n1->id)
+	    continue;
+	c1->in[j++] = c1->in[i];
+    }
+    c1->n_in = j;
+
+    return 0;
+}
+
+// N1 and n2 have a common child c.  Insert n1 between n2 and c,
+// Ie we have c->n1->n2 instead of c->n1 and c->n2.
+int ins_head_node(dgraph_t *g, node_t *n1, node_t *n2, node_t *c) {
+    int i, j;
+
+    if (n1->n_in+1 >= MAX_EDGE || n1->n_out >= MAX_EDGE)
+	return -1;
+
+    // Add pad based on c->n2 frequency
+    int *d = n2->bases[g->kmer-1];
+    int depth = d[0] + d[1] + d[2] + d[3] + d[4];
+    for (j = 0; j < g->kmer; j++)
+	n1->bases[j][4] += depth;
+
+    // Move out edge c->n2 to n1->n2
+    move_edge_out(g, n2, c, n1);
+    
+    // The above doesn't move the incoming edge linking
+    // n2->c, so we do that manually.
+    for (i = j = 0; i < c->n_in; i++) {
+	if (c->in[i]->n[1] == n2->id) {
+	    n1->in[n1->n_in++] = c->in[i];
+	    c->in[i]->n[0] = n1->id;
+	} else {
+	    c->in[j++] = c->in[i];
+	}
+    }
+    c->n_in = j;
+
+    return 0;
+}
+
+// Merge n_x1 nodes from n1 into n2 according to alignment S.
+int merge_head_tip(dgraph_t *g, node_t *n1, node_t *n2, node_t *c, int n_x1, int *S,
+		   char *ref_r, char *hseq) { // ref_r/hseq for debugging only
+    // Worth while doing a merge.
+    int x1 = 0, x2 = 0;
+    int i, ret = -1;
+
+    // NB: n_x1 is potentially up to g->kmer-1 too high.
+    while (n1 && n2 && x1 < n_x1) {
+	int op = *S++;
+	if (op == 0) {
+	    // match
+	    //printf("MERGE\t%d/%c %d/%c  %d/%d\n", x1, hseq[x1], x2, ref_r[x2], n1->id, n2->id);
+	    if (merge_head_node(g, n1, n2, c) < 0)
+		return -1;
+	    x1++; x2++;
+	    n1 = n1->n_in ? g->node[n1->in[0]->n[1]] : NULL;
+	    c = n2;
+	    node_t *new_n2 = NULL;
+	    for (i = 0; i < n2->n_in; i++) {
+		if (g->node[n2->in[i]->n[1]]->ref) {
+		    new_n2 = g->node[n2->in[i]->n[1]];
+		    break;
+		}
+	    }
+	    if (!new_n2)
+		break; // not in ref, so S alignment matrix is invalid from here on.
+	    ret = 0;
+	    n2 = new_n2;
+	} else if (op < 0) {
+	    // ins in cons
+	    while (n1 && op++) {
+		node_t *new_n1;
+		new_n1 = n1->n_in ? g->node[n1->in[0]->n[1]] : NULL;
+		//printf("INS\t%d/%c %d/-  %d/%d\n", x1, hseq[x1], x2, n1->id, n2->id);
+		if (ins_head_node(g, n1, n2, c) < 0)
+		    return -1;
+		x1++;
+		c = n1;
+		n1 = new_n1;
+		ret = 0;
+	    }
+	} else {
+	    // del in cons
+	    while (n2 && op--) {
+		//printf("SKIP\t%d/- %d/%c  %d/%d\n", x1, x2, ref_r[x2], n1->id, n2->id);
+		x2++;
+		for (i = 0; i < n2->n_in; i++) {
+		    if (g->node[n2->in[i]->n[1]]->ref) {
+			n2 = g->node[n2->in[i]->n[1]];
+			break;
+		    }
+		}
+		if (i == n2->n_in)
+		    n2 = NULL;
+	    }
+	}
+    }
+
+    return ret;
+}
+
 /*
  * Scan along reference finding nodes that are incoming.  As no
  * bubbles, all of these represent head-tips.  Scan back up that
@@ -1722,37 +1911,125 @@ int merge_head_tips(dgraph_t *g, char *ref, int len) {
 	if (!h || h->n_in <= 1)
 	    continue;
 
-	// More than one node => head tip
-	printf("Head tip at node %d\n", h->id);
-	node_t *n;
+	int ref_len = i+g->kmer-1; // prefix length to match against
 
+	// More than one node => head tip
+	//printf("Head tip at node %d\n", h->id);
+
+	int hlen = i+10, hidx = 0;
+	int (*head)[5] = malloc(hlen * sizeof(*head));
+	if (!head)
+	    return 0;
+
+	node_t *rn = NULL, *n = NULL;
 	for (j = 0; j < h->n_in; j++) {
-	    if (g->node[h->in[j]->n[1]]->ref == 0)
-		break;
+	    if (g->node[h->in[j]->n[1]]->ref == 0 && !n) {
+		n = g->node[h->in[j]->n[1]];
+	    } else if (g->node[h->in[j]->n[1]]->ref) {
+		rn = g->node[h->in[j]->n[1]];
+	    }
 	}
 
-	// Backtrack from here to unvisited non-ref branches.
+	if (!n || !rn)
+	    continue;
 
-//    FIXME:
-//
-//	kstring_t str;
-//	memset(&str, 0, sizeof(kstring_t));
-//	kputsn(n->seq, g->kmer, &str);
-//	for (;;) {
-//	    int j;
-//	    for (j = 0; j < n->n_out; j++) {
-//		
+	//printf("Check node prefix from %d and %d\n", n->id, rn->id);
+
+	node_t *last = n;
+	node_t *n1 = n;
+	// Backtrack from here to unvisited non-ref branches.
+	// We stop at the first branch and merge that in a subsequent round,
+	// if at all.
+	while (n && hidx < hlen) {
+	    memcpy(&head[hidx++], n->bases[g->kmer-1], sizeof(*head));
+	    last = n;
+	    n = n->n_in == 1 ? g->node[n->in[0]->n[1]] : NULL;
+	}
+	for (j = g->kmer-2; j >= 0 && hidx < hlen; j--)
+	    memcpy(&head[hidx++], last->bases[j], sizeof(*head));
+	
+//	// Reverse the list; shared code with assign_coords
+//	int (*v1)[5] = head;
+//	int I, J, K;
+//	for (I = 0, J = hidx-1; I < J; I++, J--) {
+//	    for (K = 0; K < 5; K++) {
+//		int tmp = v1[I][K];
+//		v1[I][K] = v1[J][K];
+//		v1[J][K] = tmp;
 //	    }
 //	}
-//	free(str.s);
+
+	// Reverse the 'ref' seq instead as we want to process alignment
+	// from right to left anyway.
+	char *ref_r = malloc(ref_len+1);
+	int k;
+	for (k = 0; k < ref_len; k++)
+	    ref_r[ref_len-1-k] = ref[k];
+	ref_r[ref_len] = 0;
+
+	char *hseq = vec2seq(head, hidx);
+	//printf("%.*s\n", ref_len, ref_r);
+	//puts(hseq);
+
+	int *S = malloc((ref_len + hidx) * sizeof(*S));
+
+	// Penalise left edge but not right edge; 1 = free, 0 = costs.
+	// Note this is left edge of reversed seq, so it would be the right
+	// edge in the graph.
+	int score = align_ss(hseq, ref_r, hidx, ref_len, 0, 0, X128, 3,1, S, 0,1,0,1);
+	//printf("Score=%d\n", score);
+	//display_ss(hseq, ref_r, hidx, ref_len, S, 0, 0);
+	//fflush(stdout);
+
+	// Scan along the graph finding the best scoring point.
+	int x1 = 0, x2 = 0, *S2 = S;
+	int best_score = 0;
+	int best_x1 = 0;
+	score = 0;
+	while (x1 < hidx && x2 < ref_len) {
+	    int op = *S2++;
+	    if (op == 0) {
+		// match
+		score += X128[hseq[x1]][ref_r[x2]]-2;
+		//printf("%d\t%d/%c %d/%c  %d\n", score, x1, hseq[x1], x2, ref_r[x2], X128[hseq[x1]][ref_r[x2]]);
+		x1++; x2++;
+	    } else if (op < 0) {
+		// ins in cons
+		while (op++) {
+		    score += islower(hseq[x1]) ? 0 : -4;
+		    //printf("%d\t%d/%c %d/-\n", score, x1, hseq[x1], x2);
+		    x1++;
+		}
+	    } else {
+		// del in cons
+		while (op--) {
+		    score += islower(ref_r[x2]) ? 0 : -4;
+		    //printf("%d\t%d/- %d/%c\n", score, x1, x2, ref_r[x2]);
+		    x2++;
+		}
+	    }
+	    if (best_score <  score) {
+		best_score = score;
+		best_x1 = x1; // before this but not including this pos
+	    }
+	}
+	//printf("Best x1 = %d / %d\n", best_x1, best_score);
+
+	if (best_score > 0)
+	    merged += (merge_head_tip(g, n1, rn, h, best_x1, S, ref_r, hseq) >= 0);
+
+	free(hseq);
+	free(ref_r);
+	free(S);
     }
 
-    return 0;
+    return merged;
 }
 
 int merge_tail_tips(dgraph_t *g) {
     return 0;
 }
+#endif
 
 void prune(dgraph_t *g, int min_count) {
     int done_something;
@@ -2941,6 +3218,31 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     assert(loop_check(g, 0) == 0);
     //graph2dot(g, "_F.dot", 0);
 
+    // Also try this after find_insertions() call
+#if 0
+    cons = compute_consensus(g); 
+    if (add_seq(g, cons->seq, 0, 0) < 0 || loop_check(g, 0)) {
+	fprintf(stderr, "Loop when adding consensus\n");
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+	g = NULL;
+	goto err;
+    }
+
+    // Merge in head & tail tips
+    int merged;
+    do {
+	merged = 0;
+	//puts("Merging\n");
+	merged += merge_head_tips(g, cons->seq, strlen(cons->seq));
+	graph2dot(g, "H.dot", 0);
+
+	merged += merge_tail_tips(g);
+	graph2dot(g, "T.dot", 0);
+    } while (merged);
+#endif
+
     int shift = bams[0]->core.pos+1;
 
     if (ref_seq) {
@@ -2988,6 +3290,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     assert(loop_check(g, 0) == 0);
 
     //graph2dot(g, "_G.dot", 0);
+
 
     // Strings of bases inserted between reference coords
     // permit us to generate alignments starting or ending
