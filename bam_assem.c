@@ -51,6 +51,7 @@ appropriate location within the string.
 
 #include "hash_table.h"
 #include "string_alloc.h"
+#include "str_finder.h"
 
 #include "htslib/sam.h"
 #include "htslib/kstring.h"
@@ -192,7 +193,7 @@ typedef struct haps {
 //#include "haps.h"
 
 #ifndef KMER
-#  define KMER 20
+#  define KMER 14
 #endif
 
 #ifndef MAX_KMER
@@ -2132,9 +2133,9 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 //		n->id);
 
 
-	//fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
+	fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
 	//if (n->ins) fprintf(fp, ".%d", n->ins);
-	fprintf(fp, "  n_%d [label=\"%d", n->id, n->id);
+	//fprintf(fp, "  n_%d [label=\"%d", n->id, n->id);
 	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
 	if (n->posa) {
 	    for (j = 0; j < g->kmer; j++) {
@@ -2192,7 +2193,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 #define MAX_GRAPH_KEY 100
 
-#if 0
+#if 1
 	// Hash key -> node map
 	HashIter *iter = HashTableIterCreate();
 	HashItem *hi;
@@ -2459,7 +2460,6 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    goto try_again;
 	}
 
-
 	// Start of read is unaligned.  Align back to ref or just soft-clip.
 	//b->core.pos = pos+shift;
 	*new_pos = pos+shift;
@@ -2613,6 +2613,166 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
     
     free(sub);
     return 0;
+}
+
+// Scan consensus to look for short tandem repeats.
+// Clip cigar based on trailing ends overlapping but not spanning an STR.
+//
+// Note this is STR specific.
+// For example (NB: for real data we'll only clip when het indel is present,
+// and ideally only then when the indel is as long or longer than the repeat
+// unit).
+//
+// BEFORE
+// Cons: ATGCTAGTGTGTGTGTCTCTCTCTCAGCTAG
+// Seq   ATGCTAGTGTGTG
+// Seq   ATGCTAGTGTGTGTGTCTCTC
+// Seq      CTAGTGTGTGTGTCTCTCTCTCAGCTAG
+// Seq          TGTGTGTGTCTCTCTCTCAGCTAG
+// Seq                    TCTCTCTCAGCTAG
+//
+// AFTER
+// STR:  ------1111111111---------------
+// STR:  ---------------2222222222------
+// Cons: ATGCTAGTGTGTGTGTCTCTCTCTCAGCTAG
+// Seq   ATGCTAgtgtgtg                    doesn't span 1
+// Seq   ATGCTAGTGTGTGTGtctctc            spans 1, but not 2
+// Seq      CTAGTGTGTGTGTCTCTCTCTCAGCTAG  spans
+// Seq          tgtgtgtgtCTCTCTCTCAGCTAG  spans 2, but not 1
+// Seq                    tctctctcAGCTAG  doesn't span 2
+int trim_cigar_STR(char *ref, int start, bam1_t **bams, int nbam, int *new_pos) {
+    // Compute short tandem repeats.
+    uint32_t *str = NULL, i;
+    int len = strlen(ref);
+
+    // Find STR and mark nodes as belonging to specific STR numbers.
+    rep_ele *reps, *elt, *tmp;
+    int str_num = 0;
+
+    reps = find_STR(ref, len, 0);
+    str = calloc(len, sizeof(*str));
+
+    DL_FOREACH_SAFE(reps, elt, tmp) {
+	// Compute markers for nodes.
+	// FIXME: only do this if seq between start/end contains
+	// lowercase letters (het ins).  Otherwise STR doesn't matter.
+	if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
+	    for (i = elt->start; i < elt->end && i < len; i++)
+		str[i] |= (1<<str_num);
+	    str_num = (str_num+1)&31;
+
+	    //fprintf(stderr, "STR: %2d .. %2d %.*s\n", elt->start, elt->end,
+	    //	    elt->end - elt->start+1, &ref[elt->start]);
+	}
+	DL_DELETE(reps, elt);
+	free(elt);
+    }
+
+    // left edge;
+    char *cig_str = NULL;
+    int cig_str_len = 0, cig_str_ind;
+    for (i = 0; i < nbam; i++) {
+	int left_trim = 0;
+	int left_shift = 0;
+	bam1_t *b = bams[i];
+	uint32_t STR = str[new_pos[i]-start];
+	if (new_pos[i] > start)
+	    STR |= str[new_pos[i]-start-1]; // incase we start in an insertion
+	int sp, rp; // seq & ref pos
+	//fprintf(stderr, "Name: %s\t", bam_get_qname(b));
+	uint8_t *seq = bam_get_seq(b);
+	int op_len = 0, op, cig_ind = 0;
+	uint32_t *cig = bam_get_cigar(b);
+	int adjacent_STR = 0;
+
+	if (cig_str_len < b->core.l_qseq + len) {
+	    cig_str_len = b->core.l_qseq + len;
+	    cig_str = realloc(cig_str, cig_str_len);
+	}
+	cig_str_ind = 0;
+	//for (sp = 0, rp = b->core.pos; sp < b->core.l_qseq; ) {
+	for (sp = 0, rp = new_pos[i]; sp < b->core.l_qseq; ) {
+	    char sbase = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, sp)];
+	    char rbase = rp >= start && rp < start+len ? ref[rp-start] : 'N';
+	    if (op_len == 0) {
+		if (cig_ind < b->core.n_cigar) {
+		    op = bam_cigar_op(cig[cig_ind]);
+		    op_len = bam_cigar_oplen(cig[cig_ind++]);
+		} else {
+		    op = BAM_CSOFT_CLIP;
+		    op_len = INT_MAX;
+		}
+	    }
+	    cig_str[cig_str_ind] = op;
+	    //printf("%c/%d\t%c/%d\t%c\t%08x\t%x\n", sbase, sp, rbase, rp, "MIDNSHP=XB"[op], STR, str[rp-start]);
+	    if (STR) {
+		// check backwards for pads
+		int j = cig_str_ind-1;
+		while (j >= 0 && cig_str[j] == BAM_CPAD)
+		    j--;
+		cig_str_ind = j+1;
+
+		if (bam_cigar_type(op) & 2) //ref
+		    left_shift++;
+		if (!(bam_cigar_type(op) & 1) && op != BAM_CHARD_CLIP) {
+		    // del, skip, pad; just delete them from cigar
+		    cig_str_ind--;
+		} else if (bam_cigar_type(op) & 1) { //seq
+		    cig_str[cig_str_ind] = BAM_CSOFT_CLIP;
+		    left_trim++;
+		}
+		adjacent_STR = 1;
+	    } else if (adjacent_STR) {
+		if (!(bam_cigar_type(op) & 2)) { //!ref, so pad, ins, etc
+		    if (op != BAM_CHARD_CLIP) {
+			left_trim++;
+			if (bam_cigar_type(op) & 1) // seq
+			    cig_str[cig_str_ind] = BAM_CSOFT_CLIP;
+			else
+			    cig_str_ind--; // trim - eg pad
+		    }
+		} else {
+		    adjacent_STR = 0;
+		}
+	    }
+
+	    if ((bam_cigar_type(op) & 2) && rp >= start && rp < start+len)
+		// and off existing STRs that finish, but don't acquire
+		// new ones that we didn't start within.
+		STR &= ~(STR ^ str[rp-start]);
+	    sp += bam_cigar_type(op) & 1;
+	    rp += (bam_cigar_type(op) & 2) ? 1 : 0;
+	    op_len--;
+	    cig_str_ind++;
+	}
+	// FIXME: trailing hard-clip at end of cigar; not in seq so exit loop early.
+
+	if (0) {
+	    fprintf(stderr, "trim %d, shift %d\t", left_trim, left_shift);
+	    int k;
+	    for (k = 0; k < cig_str_ind; k++)
+		fputc("MIDNSHP=XB"[cig_str[k]], stderr);
+	    fputc('\n', stderr);
+	}
+
+	if (left_trim || left_shift) {
+	    uint32_t *cig2 = malloc(b->core.l_qseq * sizeof(*cig2)), cig2_ind = 0;
+	    int k = 0;
+	    while (k < cig_str_ind) {
+		int j = k;
+		while (j < cig_str_ind && cig_str[k] == cig_str[j])
+		    j++;
+		cig2[cig2_ind++] = bam_cigar_gen(j-k, cig_str[k]);
+		k = j;
+	    }
+	    new_pos[i] += left_shift;
+	    replace_cigar(b, cig2_ind, cig2);
+	    free(cig2);
+	}
+    }
+
+    free(cig_str);
+    free(str);
 }
 
 int int64_compar(const void *vp1, const void *vp2) {
@@ -3022,7 +3182,7 @@ haps_t *compute_consensus(dgraph_t *g) {
     }
 
     // Find the best scoring node.
-    int best_n = 0, best_score = 0;
+    int best_n = -1, best_score = 0;
     for (i = 0; i < g->nnodes; i++) {
 	node_t *n = g->node[i];
 	if (n->pruned)
@@ -3041,6 +3201,8 @@ haps_t *compute_consensus(dgraph_t *g) {
     }
     //printf("Best node = %d (cnt %d)\n", best_n, best_score);
 
+    if (best_n < 0)
+	return NULL;
 
     // Scan backwards from here
     kstring_t seq = {0};
@@ -3058,7 +3220,10 @@ haps_t *compute_consensus(dgraph_t *g) {
 	if (best_i >= 0) {
 	    //printf("Best prev = %d\n", n->in[best_i]->n[1]);
 	    n = g->node[n->in[best_i]->n[1]];
-	    kputc(n->hi[0]->key[g->kmer-1],&seq);
+	    if (islower(vec2X(n->bases[g->kmer-1])))
+		kputc(tolower(n->hi[0]->key[g->kmer-1]),&seq);
+	    else
+		kputc(n->hi[0]->key[g->kmer-1],&seq);
 	} else {
 	    for (j = g->kmer-1; j > 0; j--)
 		kputc(n->hi[0]->key[j-1], &seq);
@@ -3076,7 +3241,10 @@ haps_t *compute_consensus(dgraph_t *g) {
     // Scan downwards
     n = g->node[best_n];
     while (n) {
-	kputc(n->hi[0]->key[g->kmer-1], &seq);
+	if (islower(vec2X(n->bases[g->kmer-1])))
+	    kputc(tolower(n->hi[0]->key[g->kmer-1]), &seq);
+	else
+	    kputc(n->hi[0]->key[g->kmer-1], &seq);
 
 	int best_i = -1;
 	best_score = 0;
@@ -3301,7 +3469,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     //graph2dot(g, "_g.dot", 0);
 
-    cons = compute_consensus(g); 
+    if (!(cons = compute_consensus(g)))
+	goto err;
+
+    fprintf(stderr, "cons=%s\n", cons->seq);
     if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g, 0)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
@@ -3317,7 +3488,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     find_bubbles(g, 1);
     assert(loop_check(g, 0) == 0);
 
-    //graph2dot(g, "_G.dot", 0);
+    graph2dot(g, "_G.dot", 0);
 
 
     // Strings of bases inserted between reference coords
@@ -3333,6 +3504,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
         if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i]) < 0)
 	    goto err;
     }
+
+    trim_cigar_STR(ref->seq+g->kmer, shift, bams, nhaps, new_pos);
 
     ret = 0;
  err:

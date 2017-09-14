@@ -102,5 +102,5 @@ $(UPDATE_KMERS):
 
 # A test program for finding regions to realign.
 # Could also be used to replace the GATK component?
-bam_problem_regions: bam_problem_regions.o bam_assem.o
-	$(CC) -o $@ $(OBJS) bam_problem_regions.o bam_assem.o $(LDFLAGS) $(LIBS)
+bam_problem_regions: bam_problem_regions.o bam_assem.o str_finder.o
+	$(CC) -o $@ $(OBJS) bam_problem_regions.o bam_assem.o str_finder.o $(LDFLAGS) $(LIBS)
