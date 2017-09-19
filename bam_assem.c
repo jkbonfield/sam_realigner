@@ -2640,10 +2640,51 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 // Seq      CTAGTGTGTGTGTCTCTCTCTCAGCTAG  spans
 // Seq          tgtgtgtgtCTCTCTCTCAGCTAG  spans 2, but not 1
 // Seq                    tctctctcAGCTAG  doesn't span 2
-int trim_cigar_STR(char *ref, int start, bam1_t **bams, int nbam, int *new_pos) {
+int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, int *new_pos) {
     // Compute short tandem repeats.
     uint32_t *str = NULL, i;
-    int len = strlen(ref);
+    int len = strlen(ref), clen = strlen(cons);
+
+    // Align ref and consensus to work out regions of heterozygous and
+    // non-heterozygous indel.
+
+    int *S = malloc((clen+len) * sizeof(*S));
+    if (!S)
+	return -1;
+    align_ss(ref, cons, len, clen, 0, 0, X128, 1,3, S, 1,1,1,1);
+    //fprintf(stderr, "Ref=%s\n", ref);
+    //fprintf(stderr, "Con=%s\n", cons);
+    //display_ss(ref, cons, len, clen, S, 0, 0);
+    //fflush(stderr);
+    //fflush(stdout);
+
+    uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
+    if (!indel)
+	return -1;
+
+    int rp = 0, cp = 0, *S2 = S;
+    while (rp < len && cp < clen) {
+	int op = *S2++;
+	if (op == 0) {
+	    if (islower(cons[cp]))
+		indel[rp] = 1;
+	    assert(rp >= 0 && rp < len);
+	    rp++; cp++;
+	} else if (op < 0) {
+	    // ins in cons
+	    indel[rp>0?rp-1:rp] = 1;
+	    indel[rp] = 1;
+	    assert(rp >= 0 && rp < len);
+	    cp += -op;
+	} else {
+	    // del in cons
+	    while (op--) {
+		if (rp < len)
+		    indel[rp++] = 1;
+	    }
+	}
+    }
+    
 
     // Find STR and mark nodes as belonging to specific STR numbers.
     rep_ele *reps, *elt, *tmp;
@@ -2653,9 +2694,15 @@ int trim_cigar_STR(char *ref, int start, bam1_t **bams, int nbam, int *new_pos) 
     str = calloc(len, sizeof(*str));
 
     DL_FOREACH_SAFE(reps, elt, tmp) {
-	// Compute markers for nodes.
-	// FIXME: only do this if seq between start/end contains
-	// lowercase letters (het ins).  Otherwise STR doesn't matter.
+	// If any of STR spans an observed indel, then mark it, otherwise
+	// we're happy to keep alignments against this region.
+	for (i = elt->start; i < elt->end; i++) {
+	    if (indel[i])
+		break;
+	}
+	if (i == elt->end)
+	    continue;
+
 	if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
 	    for (i = elt->start; i < elt->end && i < len; i++)
 		str[i] |= (1<<str_num);
@@ -2773,6 +2820,8 @@ int trim_cigar_STR(char *ref, int start, bam1_t **bams, int nbam, int *new_pos) 
 
     free(cig_str);
     free(str);
+    free(S);
+    free(indel);
 }
 
 int int64_compar(const void *vp1, const void *vp2) {
@@ -3505,7 +3554,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	    goto err;
     }
 
-    trim_cigar_STR(ref->seq+g->kmer, shift, bams, nhaps, new_pos);
+    // Why g->kmer*2 for cons?
+    trim_cigar_STR(ref->seq+g->kmer, shift, cons->seq+g->kmer*2-1, bams, nhaps, new_pos);
 
     ret = 0;
  err:
