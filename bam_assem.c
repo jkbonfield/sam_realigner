@@ -2696,8 +2696,8 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     DL_FOREACH_SAFE(reps, elt, tmp) {
 	// If any of STR spans an observed indel, then mark it, otherwise
 	// we're happy to keep alignments against this region.
-	for (i = elt->start; i < elt->end; i++) {
-	    if (indel[i])
+	for (i = elt->start-5; i < elt->end+5; i++) {
+	    if (i >= 0 && i < len && indel[i])
 		break;
 	}
 	if (i == elt->end)
