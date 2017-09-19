@@ -2338,9 +2338,21 @@ static void replace_cigar(bam1_t *b, int n, uint32_t *cigar)
     } else memcpy(b->data + b->core.l_qname, cigar, n * 4);
 }
 
+// Sequence bases used, barring clips
+int mapped_bases(uint32_t *cig, int ncig) {
+    int i, n = 0;
+    for (i =0; i < ncig; i++) {
+	if (bam_cigar_op(cig[i]) != BAM_CSOFT_CLIP &&
+	    (bam_cigar_type(bam_cigar_op(cig[i])) & 1))
+	    n += bam_cigar_oplen(cig[i]);
+    }
+
+    return n;
+}
+
 
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
-int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos) {
+int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos, int doit) {
     int i;
     node_t *n = NULL, *last = NULL;
     int cig_op = 999, cig_len = 0;
@@ -2462,7 +2474,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 
 	// Start of read is unaligned.  Align back to ref or just soft-clip.
 	//b->core.pos = pos+shift;
-	*new_pos = pos+shift;
+	if (doit) *new_pos = pos+shift;
 	if (i + g->kmer-1 > 0) {
 	    int sc = i + g->kmer-1;
 	    ADD_CIGAR(BAM_CSOFT_CLIP, sc);
@@ -2607,10 +2619,16 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	b->core.flag |= BAM_FUNMAP;
     }
 
+    int old_len = mapped_bases(bam_get_cigar(b), b->core.n_cigar);
+    int new_len = mapped_bases(cig_a, cig_ind);
+    if (new_len < 0.7*old_len)
+	b->core.flag |= BAM_FUNMAP;
+
     // TODO: don't replace cigar if alignment fails.
     // Instead keep original, as likely still valid (it's against reference still)
-    replace_cigar(b, cig_ind, cig_a);
-    
+    if (doit)
+	replace_cigar(b, cig_ind, cig_a);
+
     free(sub);
     return 0;
 }
@@ -3549,10 +3567,28 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     //fprintf(stderr, "Pruning\n");
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);
 
+#if 0
+    int unmapped = 0;
     for (i = 0; i < nhaps; i++) {
-        if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i]) < 0)
+	int fl = bams[i]->core.flag;
+        if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 0) < 0)
+	    goto err;
+	unmapped += (bams[i]->core.flag & BAM_FUNMAP) ? 1 : 0;
+	bams[i]->core.flag = fl;
+    }
+
+    if (unmapped < .2*nhaps) {
+	for (i = 0; i < nhaps; i++) {
+	    if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 1) < 0)
+		goto err;
+	}
+    }
+#else
+    for (i = 0; i < nhaps; i++) {
+        if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 1) < 0)
 	    goto err;
     }
+#endif
 
     // Why g->kmer*2 for cons?
     trim_cigar_STR(ref->seq+g->kmer, shift, cons->seq+g->kmer*2-1, bams, nhaps, new_pos);
