@@ -66,8 +66,11 @@
  */
 
 // Default params
-#define MARGIN 20   // margin around suspect regions
-#define CON_MARGIN 20 // margin to add on to consensus when realigning
+// FIXME: ideally we should have MARGIN+STR size, so an indel at pos
+// 1234 in an STR spanning 1234 to 1250 should consider the problem to
+// be 1234-MARGIN to 1250+MARGIN instead of to 1234+MARGIN.
+#define MARGIN 50   // margin around suspect regions
+#define CON_MARGIN 50 // margin to add on to consensus when realigning
 #define MIN_INDEL 2
 
 #define MAX_DEPTH 20000

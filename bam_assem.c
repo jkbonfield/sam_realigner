@@ -59,6 +59,9 @@ appropriate location within the string.
 #define IS_REF 1
 #define IS_CON 2
 
+#define GOPEN 8
+#define GEXT  4
+
 //---------------------------------------------------------------------------
 
 int W128[128][128];
@@ -193,7 +196,7 @@ typedef struct haps {
 //#include "haps.h"
 
 #ifndef KMER
-#  define KMER 14
+#  define KMER 40
 #endif
 
 #ifndef MAX_KMER
@@ -949,7 +952,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	memcpy(v2[len2++], l->bases[i], 5*sizeof(int));
 
     int *S = malloc((len1+len2)*sizeof(int));
-    align_vv(v1, v2, len1, len2, GAP_OPEN, GAP_EXTEND, S, 0,0,0,0);
+    align_vv(v1, v2, len1, len2, GOPEN,GEXT, S, 0,0,0,0);
 
     // Remove path2 from start/end nodes.
     n = g->node[start];
@@ -1983,7 +1986,7 @@ int merge_head_tips(dgraph_t *g, char *ref, int len) {
 	// Penalise left edge but not right edge; 1 = free, 0 = costs.
 	// Note this is left edge of reversed seq, so it would be the right
 	// edge in the graph.
-	int score = align_ss(hseq, ref_r, hidx, ref_len, 0, 0, X128, 3,1, S, 0,1,0,1);
+	int score = align_ss(hseq, ref_r, hidx, ref_len, 0, 0, X128, GOPEN,GEXT, S, 0,1,0,1);
 	//printf("Score=%d\n", score);
 	//display_ss(hseq, ref_r, hidx, ref_len, S, 0, 0);
 	//fflush(stdout);
@@ -2360,6 +2363,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
     int seq_start = 0;
     char *orig_seq = seq;
     int len = strlen(seq);
+    int ref_len = strlen(ref);
 
     char *sub = malloc(g->kmer + len + 1), *sub_k = sub + g->kmer;
     memcpy(sub_k, seq, len);
@@ -2379,7 +2383,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    break;
     }
 
-    if (!n) {
+    if (!n/* || b->core.qual <= 10*/) {
 	fprintf(stderr, "No match found for seq\n");
 	goto unmapped;
     }
@@ -2483,11 +2487,26 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	// Trace path for each successive node.
 	char *s1 = seq+i;
 	char s2[MAX_KMER*2];
+	uint8_t *bam_seq = bam_get_seq(b);
+	uint8_t *bam_qual = bam_get_qual(b);
 	for (; i <= len - g->kmer; i++) {
+#ifndef NO_QUAL_FIX
+	    if (orig_seq[i+g->kmer-1] == "=ACMGRSVTWYHKDBN"[bam_seqi(bam_seq, i+g->kmer-1)])
+		bam_qual[i+g->kmer-1] += 5;
+	    else
+		bam_qual[i+g->kmer-1] = bam_qual[i+g->kmer-1]-10>0 ?bam_qual[i+g->kmer-1]-10 :0;
+#endif
+	    //fprintf(stderr, "base %c vs %c vs %c\n", orig_seq[i+g->kmer-1], seq[i+g->kmer-1], "=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(b), i+g->kmer-1)]);
 	    last = n;
 	    if (i == len-g->kmer) {
 		memcpy(s2, seq+i, g->kmer);
-		memcpy(s2+g->kmer, ref+pos+2, g->kmer);
+		if (pos+2 + g->kmer >= ref_len) {
+		    memset(s2+g->kmer, 'N', g->kmer);
+		    if (pos+2 < ref_len)
+			memcpy(s2+g->kmer, ref+pos+2, ref_len - (pos+2));
+		} else {
+		    memcpy(s2+g->kmer, ref+pos+2, g->kmer);
+		}
 		s1 = s2;
 	    }
 	    if (!(n = find_node(g, s1++, g->kmer, 0)) || n->pruned)
@@ -2669,7 +2688,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     int *S = malloc((clen+len) * sizeof(*S));
     if (!S)
 	return -1;
-    align_ss(ref, cons, len, clen, 0, 0, X128, 1,3, S, 1,1,1,1);
+    align_ss(ref, cons, len, clen, 0, 0, X128, GOPEN,GEXT, S, 1,1,1,1);
     //fprintf(stderr, "Ref=%s\n", ref);
     //fprintf(stderr, "Con=%s\n", cons);
     //display_ss(ref, cons, len, clen, S, 0, 0);
@@ -2688,18 +2707,26 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 		indel[rp] = 1;
 	    assert(rp >= 0 && rp < len);
 	    rp++; cp++;
-	} else if (op < 0) {
+	} else if (op > 0) {
 	    // ins in cons
-	    indel[rp>0?rp-1:rp] = 1;
-	    indel[rp] = 1;
-	    assert(rp >= 0 && rp < len);
-	    cp += -op;
+	    int het = 0;
+	    while (op--) {
+		//fprintf(stderr, "Ins at %d: %c\n", rp+start, cons[cp]);
+		if (islower(cons[cp++]))
+		    het=1;
+	    }
+	    if (het) {
+		indel[rp>0?rp-1:rp] = 1;
+		indel[rp] = 1;
+		assert(rp >= 0 && rp < len);
+	    }
 	} else {
 	    // del in cons
-	    while (op--) {
-		if (rp < len)
-		    indel[rp++] = 1;
-	    }
+//	    while (op++) {
+//		if (rp < len)
+//		    indel[rp++] = 1;
+//	    }
+	    rp += -op;
 	}
     }
     
@@ -2714,11 +2741,13 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     DL_FOREACH_SAFE(reps, elt, tmp) {
 	// If any of STR spans an observed indel, then mark it, otherwise
 	// we're happy to keep alignments against this region.
-	for (i = elt->start-5; i < elt->end+5; i++) {
+	int left  = elt->start-5 < 0 ? 0 : elt->start-5;
+	int right = elt->end+5 > len ? len : elt->end+5;
+	for (i = left; i < right; i++) {
 	    if (i >= 0 && i < len && indel[i])
 		break;
 	}
-	if (i == elt->end)
+	if (i == right)
 	    continue;
 
 	if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
@@ -2740,7 +2769,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	int left_trim = 0;
 	int left_shift = 0;
 	bam1_t *b = bams[i];
-	uint32_t STR = str[new_pos[i]-start];
+	uint32_t STR = str[new_pos[i]+1-start];
 	if (new_pos[i] > start)
 	    STR |= str[new_pos[i]-start-1]; // incase we start in an insertion
 	int sp, rp; // seq & ref pos
@@ -3046,6 +3075,9 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 		continue;
 
 	    s2[j+k] = ((char *)hi2->data.p)[k];
+//#ifndef NO_QUAL_FIX
+//	    qual[j+k] /= 4; // if we corrected it, also mark as low qual!
+//#endif
 	    nc++;
 	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
 	}
@@ -3408,6 +3440,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     dgraph_t *g;
     haps_t *haps = NULL, *cons = NULL;
     haps_t *ref = NULL, *ref_ = NULL;
+    int plus10 = 1;
 
     dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start);
 
@@ -3548,6 +3581,16 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	g = NULL;
 	goto err;
     }
+
+    // Auto tune kmer + extra 10 to make alignments a bit better
+    if (plus10 && kmer+10 < MAX_KMER) {
+	plus10--;
+	graph_destroy(g);
+	g = NULL;
+	kmer += 10;
+	goto bigger_kmer;
+    }
+
     if (!ref)
 	ref = cons;
 
