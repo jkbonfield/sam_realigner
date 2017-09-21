@@ -2353,6 +2353,25 @@ int mapped_bases(uint32_t *cig, int ncig) {
     return n;
 }
 
+void bam_set_seqi(uint8_t *s, int i, char b) {
+    // 0=top 4, 1=bot 4
+    // 2=top 4, 2=bot 4 etc
+    s[i>>1] = (s[i>>1] & (0xf0 >> ((~i&1)<<2))) | (b << ((~i&1)<<2));
+}
+
+void bam_set_seqi_base(bam1_t *b, int pos, char base) {
+    static char L[256] = {0};
+    static int init = 0;
+    if (!init) {
+	int i;
+	for (i = 0; i < 16; i++)
+	    L["=ACMGRSVTWYHKDBN"[i]] = i;
+	init = 1;
+    }
+
+    bam_set_seqi(bam_get_seq(b), pos, L[(uint8_t)base]);
+}
+
 
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
 int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos, int doit) {
@@ -2496,6 +2515,12 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    else
 		bam_qual[i+g->kmer-1] = bam_qual[i+g->kmer-1]-10>0 ?bam_qual[i+g->kmer-1]-10 :0;
 #endif
+
+#define NO_SEQ_FIX
+#ifndef NO_SEQ_FIX
+	    bam_set_seqi_base(b, i+g->kmer-1, orig_seq[i+g->kmer-1]);
+#endif
+
 	    //fprintf(stderr, "base %c vs %c vs %c\n", orig_seq[i+g->kmer-1], seq[i+g->kmer-1], "=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(b), i+g->kmer-1)]);
 	    last = n;
 	    if (i == len-g->kmer) {
