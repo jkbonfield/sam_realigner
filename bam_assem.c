@@ -3570,10 +3570,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	ref_ = ref = malloc(sizeof(*ref));
 	if (!ref)
 	    goto err;
-	fprintf(stderr, "Alloc %p\n", ref);
+	//fprintf(stderr, "Alloc %p\n", ref);
 	ref->name = "Ref";
 	ref->pos = ref_start;
-	fprintf(stderr, "ref=%.*s\n", ref_len, ref_seq);
+	//fprintf(stderr, "ref=%.*s\n", ref_len, ref_seq);
 
 	ref->seq = malloc(ref_len + g->kmer-1 + 1);
 	ref->seq[ref_len + g->kmer-1] = 0;
@@ -3673,3 +3673,141 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     return ret;
 }
+
+#ifdef TEST_MAIN
+// Basic load function to read an entire BAM file.
+// This is just a test for small subsets, rather than streaming
+// a large file.
+bam1_t **load_bam(char *fn, int *nrecs, bam_hdr_t **hdr_p) {
+    samFile *in = sam_open(fn, "r");
+    bam_hdr_t *hdr;
+    int nalloc = 128, nr = 0, i;
+    bam1_t **bams = calloc(128, sizeof(*bams));
+
+    if (!in)
+	return NULL;
+
+    if (!(*hdr_p = hdr = sam_hdr_read(in)))
+	return NULL;
+
+    bams[nr] = calloc(1, sizeof(bam1_t));
+    while (sam_read1(in, hdr, bams[nr]) >= 0) {
+	if (++nr >= nalloc) {
+	    nalloc *= 2;
+	    bams = realloc(bams, nalloc * sizeof(*bams));
+	    memset(&bams[nalloc/2], 0, nalloc/2*sizeof(*bams));
+	}
+	bams[nr] = calloc(1, sizeof(bam1_t));
+    }
+
+    sam_close(in);
+
+    *nrecs = nr;
+    return bams;
+}
+
+#define MAX_LINE 1000000
+
+haps_t *load_fasta(char *fn, int *nhaps) {
+    haps_t *h = NULL;
+    int nh = 0, nalloc = 0;
+    char line[MAX_LINE];
+    FILE *fp = fopen(fn, "r");
+
+    if (!fp) {
+	perror(fn);
+	return NULL;
+    }
+
+    // Simple 2 line affair only
+    while (fgets(line, MAX_LINE, fp)) {
+	int l = strlen(line);
+	if (line[l-1] == '\n')
+	    line[l-1] = 0;
+
+	if (line[0] == 0)
+	    continue;
+
+	if (line[0] != '>') {
+	    fprintf(stderr, "Unknown format\n");
+	    return NULL;
+	}
+	
+	if (nh >= nalloc) {
+	    nalloc = nh ? nh*2 : 64;
+	    h = realloc(h, nalloc*sizeof(*h));
+	    if (!h)
+		return NULL;
+	}
+
+	h[nh].name = strdup(line+1);
+	if (!fgets(line, MAX_LINE, fp)) {
+	    if (nhaps) *nhaps = nh;
+	    fclose(fp);
+	    return h;
+	}
+
+	l = strlen(line);
+	if (line[l-1] == '\n')
+	    line[l-1] = 0;
+	char *line_start = line;
+	while (isspace(*line_start))
+	    line_start++;
+	h[nh].seq = strdup(line_start);
+	h[nh].pos = 0;
+	h[nh].qual = NULL;
+
+	nh++;
+    }
+
+    fprintf(stderr, "Loaded %d seqs\n", nh);
+
+    if (nhaps) *nhaps = nh;
+    fclose(fp);
+    return h;
+}
+
+int main(int argc, char **argv) {
+    bam_hdr_t *hdr;
+    int nbams, *newpos, start, i;
+    bam1_t **bams = load_bam(argv[1], &nbams, &hdr);
+
+    if (!(newpos = calloc(nbams, sizeof(*newpos))))
+	return 1;
+
+    char *ref = NULL;
+    if (argc > 2) {
+	fprintf(stderr, "===> Adding reference\n");
+	haps_t *h = load_fasta(argv[2], 0);
+	ref = h->seq;
+	start = atoi(h->name);
+	free(h);
+    }
+
+    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start) < 0)
+	return 1;
+
+    // FIXME/TODO: sort output
+    samFile *fp;
+    if (!(fp = sam_open("-", "w")))
+	return 1;
+    if (sam_hdr_write(fp, hdr) < 0)
+	return 1;
+    for (i = 0; i < nbams; i++) {
+	bams[i]->core.pos = newpos[i];
+	if (sam_write1(fp, hdr, bams[i]) < 0)
+	    return 1;
+    }
+    if (sam_close(fp) < 0)
+	return 1;
+
+
+    free(ref);
+    for (i = 0; i < nbams; i++)
+	bam_destroy1(bams[i]);
+    free(bams);
+    bam_hdr_destroy(hdr);
+
+    return 0;
+}
+#endif

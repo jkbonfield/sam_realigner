@@ -17,7 +17,7 @@ all: $(ALL)
 # assem: $(OBJS1)
 # 	$(CC) -o $@ $(OBJS) $(LDFLAGS) $(LIBS)
 
-OBJS=hash_table.o pooled_alloc.o string_alloc.o align_ss.o align_sv.o
+OBJS=hash_table.o pooled_alloc.o string_alloc.o align_ss.o align_sv.o str_finder.o
 assem_bam_k3: $(OBJS) assem_bam3_3.o
 	$(CC) -o $@ $(OBJS) assem_bam3_3.o $(LDFLAGS) $(LIBS)
 
@@ -30,17 +30,17 @@ assem_bam_k13: $(OBJS) assem_bam3_13.o
 assem_bam_k18: $(OBJS) assem_bam3_18.o
 	$(CC) -o $@ $(OBJS) assem_bam3_18.o $(LDFLAGS) $(LIBS)
 
-assem_bam3_3.o: assem_bam3.c
-	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=3 -c $< -o $@
+assem_bam3_3.o: bam_assem.c
+	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=3 -DTEST_MAIN -c $< -o $@
 
-assem_bam3_4.o: assem_bam3.c
-	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=4 -c $< -o $@
+assem_bam3_4.o: bam_assem.c
+	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=4 -DTEST_MAIN -c $< -o $@
 
-assem_bam3_13.o: assem_bam3.c
-	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=13 -c $< -o $@
+assem_bam3_13.o: bam_assem.c
+	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=13 -DTEST_MAIN -c $< -o $@
 
-assem_bam3_18.o: assem_bam3.c
-	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=18 -c $< -o $@
+assem_bam3_18.o: bam_assem.c
+	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -DKMER=18 -DTEST_MAIN -c $< -o $@
 
 clean:
 	-rm assem_bam_k[0-9]* *.o
@@ -102,5 +102,5 @@ $(UPDATE_KMERS):
 
 # A test program for finding regions to realign.
 # Could also be used to replace the GATK component?
-bam_problem_regions: bam_problem_regions.o bam_assem.o str_finder.o
-	$(CC) -o $@ $(OBJS) bam_problem_regions.o bam_assem.o str_finder.o $(LDFLAGS) $(LIBS)
+bam_problem_regions: $(OBJS) bam_problem_regions.o bam_assem.o
+	$(CC) -o $@ $(OBJS) bam_problem_regions.o bam_assem.o $(LDFLAGS) $(LIBS)
