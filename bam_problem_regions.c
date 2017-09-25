@@ -138,6 +138,7 @@
 
 #include <htslib/sam.h>
 #include <htslib/khash.h>
+#include <htslib/faidx.h>
 
 #include "tree.h"
 
@@ -349,7 +350,8 @@ int check_overlap(bam_sorted_list *bl, int start, int *start_ovl, int *end_ovl) 
 
 int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
 		 char *cons, int cons_len,
-		 int start, int end, int start_ovl, int end_ovl) {
+		 int start, int end, int start_ovl, int end_ovl,
+		 faidx_t *fai) {
     bam_sorted_item *bi, *next;
     int count = 0, ba_sz = 0;
     bam1_t **ba = NULL;
@@ -395,12 +397,27 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     // FIXME: compute "ref" as cigar oriented consensus? Maybe cannot
     // when deletion?
     char *ref = NULL;//get_ref(ref_pos); // fixme; shouldn't be strdup, but return ptr+len
-    if (bam_realign(hdr, ba, count, new_pos, cons, cons_len, start_ovl) < 0) {
+
+    // FIXME: Use real ref and not cons!
+    char region[1024];
+    // FIXME: look up name in hdr
+    sprintf(region, "20:%d-%d", start_ovl+1, end_ovl);
+    int seq_len;
+    if (fai) {
+	ref = fai_fetch(fai, region, &seq_len);
+    } else {
+	ref = cons;
+	seq_len = cons_len;
+    }
+
+    //if (bam_realign(hdr, ba, count, new_pos, cons, cons_len, start_ovl) < 0) {
+    if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl) < 0) {
 	free(new_pos);
 	free(ba);
 	return -1;
     }
-    free(ref);
+    if (fai)
+	free(ref);
 
     // Resort the list as realignment can move reads around.
     bi = RB_MIN(bam_sort, bl);
@@ -583,6 +600,9 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 
     if (!cons)
 	return -1;
+
+#define HREF "/nfs/srpipe_references/references/Human/1000Genomes_hs37d5/all/fasta/hs37d5.fa"
+    faidx_t *fai = fai_load(HREF);
 
     while ((plp = bam_plp_auto(p_iter, &tid, &pos, &n_plp))) {
 	int i, preserve = 0, indel = 0;
@@ -808,7 +828,8 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", pos, start_reg, end_reg, start_ovl, end_ovl);
 		    realign_list(&cd, header, b_hist, cons + start_ovl-CON_MARGIN - start_cons,
 				 end_ovl - start_ovl + 2*CON_MARGIN,
-				 start_reg, end_reg, start_ovl-CON_MARGIN, end_ovl+CON_MARGIN);
+				 start_reg, end_reg, start_ovl-CON_MARGIN, end_ovl+CON_MARGIN,
+				 fai);
 		    start_reg = end_reg = left_most;
 		    start_ovl = end_ovl = 0;
 		    status = S_OK;
