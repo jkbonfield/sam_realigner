@@ -2102,7 +2102,7 @@ void validate_graph(dgraph_t *g) {
     }
 }
 
-#if 0
+#if 1
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     return 0;
 }
@@ -3176,46 +3176,48 @@ void complement_seq ( char *seq, int seq_len ) {
 
 int trim_adapters(haps_t *h, int n, char *fn, int kmer, int min_qual) {
     int i,j;
-    HashTable *hash;
-    hash = HashTableCreate(1024, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    static HashTable *hash = NULL;
+    if (!hash) {
+	hash = HashTableCreate(1024, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
 
-    // expected fasta of short seqs
-    FILE *fp = fopen(fn, "r");
-    if (!fp) {
-	perror(fn);
-	return -1;
-    }
-
-    // Hash adapter file
-    char line[1024], line2[1024];
-    while (fgets(line, 1024, fp)) {
-	if (*line == '>')
-	    continue;
-	line[1023]=0;
-	int len = strlen(line)-1;
-	line[len] = 0; // trim \n
-	memcpy(line2, line, len);
-	int dir;
-	for (dir = 0; dir <= 1; dir++) {
-	    for (i = 0; i < len-kmer; i++) {
-		HashData hd;
-		hd.i = dir;
-		HashTableAdd(hash, line+i, kmer, hd, NULL);
-
-		// Neighbours
-		for (j = 0; j < kmer; j++) {
-		    line2[i+j] = 'A'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
-		    line2[i+j] = 'C'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
-		    line2[i+j] = 'G'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
-		    line2[i+j] = 'T'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
-		    line2[i+j] = line[i+j];
-		}
-	    }
-
-	    complement_seq(line, len);
+	// expected fasta of short seqs
+	FILE *fp = fopen(fn, "r");
+	if (!fp) {
+	    perror(fn);
+	    return -1;
 	}
+
+	// Hash adapter file
+	char line[1024], line2[1024];
+	while (fgets(line, 1024, fp)) {
+	    if (*line == '>')
+		continue;
+	    line[1023]=0;
+	    int len = strlen(line)-1;
+	    line[len] = 0; // trim \n
+	    memcpy(line2, line, len);
+	    int dir;
+	    for (dir = 0; dir <= 1; dir++) {
+		for (i = 0; i < len-kmer; i++) {
+		    HashData hd;
+		    hd.i = dir;
+		    HashTableAdd(hash, line+i, kmer, hd, NULL);
+
+		    // Neighbours
+		    for (j = 0; j < kmer; j++) {
+			line2[i+j] = 'A'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+			line2[i+j] = 'C'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+			line2[i+j] = 'G'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+			line2[i+j] = 'T'; HashTableAdd(hash, line2+i, kmer, hd, NULL);
+			line2[i+j] = line[i+j];
+		    }
+		}
+
+		complement_seq(line, len);
+	    }
+	}
+	fclose(fp);
     }
-    fclose(fp);
 
     // Trim seqs
     for (i = 0; i < n; i++) {
@@ -3273,7 +3275,7 @@ int trim_adapters(haps_t *h, int n, char *fn, int kmer, int min_qual) {
 	}
     }
 
-    HashTableDestroy(hash, 0);
+    //HashTableDestroy(hash, 0);
     fflush(stdout);
 
     return 0;
@@ -3454,7 +3456,7 @@ void free_haps(haps_t *h, int n) {
 }
 
 static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_len, int ref_start) {
-#if 1
+#if 0
     samFile *fp;
     int i;
 
