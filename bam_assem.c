@@ -2388,6 +2388,8 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
     memcpy(sub_k, seq, len);
     sub_k[len] = 0;
 
+    *new_pos = b->core.pos; // default to original
+
     int cig_a[MAX_CIGAR];
     int cig_ind = 0;
 
