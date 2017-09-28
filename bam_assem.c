@@ -40,6 +40,10 @@ appropriate location within the string.
  *   In this case edge->n[0] == n1 and edge->n[1] == n2.  Right now however
  *   n[0] is always <this node> and n[1] is always <other node>, which forces
  *   having two edge structs.
+ *
+ * - Track nodes on cons/ref path, but not in cons/ref.  Ie if we go from
+ *   ref through non-ref node X,Y,Z and back to ref, then X,Y,Z are on-ref.
+ *   This will greatly simplify alignment of cons vs ref later on.
  */
 
 #include <stdio.h>
@@ -197,6 +201,10 @@ typedef struct haps {
 
 #ifndef KMER
 #  define KMER 40
+#endif
+
+#ifndef KMER_INC_FINAL
+#  define KMER_INC_FINAL 10
 #endif
 
 #ifndef MAX_KMER
@@ -1179,10 +1187,16 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		    //printf("I  - %2d\n", n2->id);
 
 		    if (first_ins) {
-			// Link l1 in to n2
-			// Link n2 out to l1
-			l1->in[0]->n[1] = n2->id; // FIXME: plus edge hash
+			// Replace l1 in from n1 with in from n2.
+			for (j = 0; j < l1->n_in; j++) {
+			    if (l1->in[j]->n[1] == n1->id) {
+				// FIXME: plus edge hash
+				l1->in[j]->n[1] = n2->id;
+				// FIXME: do we need to ensure this is in[0]?
+			    }
+			}
 
+			// Link n2 out to l1
 			for (j = 0; j < n2->n_out; j++)
 			    if (n2->out[j]->n[1] == l1->id)
 				break;
@@ -2088,7 +2102,7 @@ void validate_graph(dgraph_t *g) {
     }
 }
 
-#if 1
+#if 0
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     return 0;
 }
@@ -3505,7 +3519,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // a broken homo-polymer.  In which case keep it unmapped and ignore
     // it.
     for (; kmer < MAX_KMER; kmer += 10) {
-	fprintf(stderr, "Building graph with kmer=%d\n", kmer);
+	fprintf(stderr, "Building graph with kmer=%d, nseqs=%d\n", kmer, nhaps);
 	g = graph_create(kmer);
 	for (i = 0; i < nhaps; i++) {
 	    if (add_seq(g, haps[i].seq, 0, 0) != 0) {
@@ -3610,11 +3624,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     }
 
     // Auto tune kmer + extra 10 to make alignments a bit better
-    if (plus10 && kmer+10 < MAX_KMER) {
+    if (plus10 && kmer+KMER_INC_FINAL < MAX_KMER && KMER_INC_FINAL) {
 	plus10--;
 	graph_destroy(g);
 	g = NULL;
-	kmer += 10;
+	kmer += KMER_INC_FINAL;
 	goto bigger_kmer;
     }
 
@@ -3782,7 +3796,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "===> Adding reference\n");
 	haps_t *h = load_fasta(argv[2], 0);
 	ref = h->seq;
-	start = atoi(h->name);
+	start = atoi(h->name)-1;
 	free(h);
     }
 
