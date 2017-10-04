@@ -680,6 +680,12 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
     if (!len)
 	len = strlen(seq);
 
+    // pad strip
+    for (i = j = 0; i < len; i++)
+	if (seq[i] != '*')
+	    seq[j++] = seq[i];
+    len = j;
+
     if (!(ref & IS_REF)) {
 	// Prune trailing Ns.
 	while (*seq == 'N' && len > 0)
@@ -1765,7 +1771,7 @@ void tag_hairs(dgraph_t *g) {
 }
 
 
-#if 0
+#if 1
 // Merge nodes n1 onto n2, with relationships n1->c1 and n2->c2.
 // NB: c2 is unrequired, so not specified as an argument.
 // We are culling node n1, so c1 incoming is removed.
@@ -2218,7 +2224,8 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 	    node_t *n = hi->data.p;
 	    fprintf(fp, " n_%.*s [label=\"%.*s\", color=\"grey\", group=%d]\n",
 	    	    hi->key_len, hi->key,
-		    MIN(MAX_GRAPH_KEY, hi->key_len), hi->key, n->id);
+		    //MIN(MAX_GRAPH_KEY, hi->key_len), hi->key, n->id);
+		    1, hi->key + hi->key_len-1, n->id);
 	    fprintf(fp, " n_%.*s -> n_%d [color=\"grey\"]\n",
 	    	    hi->key_len, hi->key, n->id);
 	    //fprintf(fp, " n_%.5s [label=\"%.*s\", color=\"grey\", group=%d]\n",
@@ -2820,9 +2827,13 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	uint32_t *cig = bam_get_cigar(b);
 	int adjacent_STR = 0;
 
-	if (cig_str_len < b->core.l_qseq + len) {
-	    cig_str_len = b->core.l_qseq + len;
+	int cig_len = len;
+	for (cig_ind = 0; cig_ind < b->core.n_cigar; cig_ind++)
+	    cig_len += cig[cig_ind]>>BAM_CIGAR_SHIFT;
+	if (cig_str_len < cig_len) {
+	    cig_str_len = cig_len;
 	    cig_str = realloc(cig_str, cig_str_len);
+	    assert(cig_str);
 	}
 	cig_str_ind = 0;
 	//for (sp = 0, rp = b->core.pos; sp < b->core.l_qseq; ) {
@@ -2838,6 +2849,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 		    op_len = INT_MAX;
 		}
 	    }
+	    assert(cig_str_ind < cig_len);
 	    cig_str[cig_str_ind] = op;
 	    //printf("%c/%d\t%c/%d\t%c\t%08x\t%x\n", sbase, sp, rbase, rp, "MIDNSHP=XB"[op], STR, str[rp-start]);
 	    if (STR) {
@@ -3455,8 +3467,8 @@ void free_haps(haps_t *h, int n) {
     free(h);
 }
 
-static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_len, int ref_start) {
-#if 0
+static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_len, int ref_start,
+		       char *cons1, char *cons2, int cons_len) {
     samFile *fp;
     int i;
 
@@ -3474,18 +3486,19 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
     FILE *f = fopen("_tmp.ref", "w");
     fprintf(f, ">%d\n%.*s\n", ref_start, ref_len, ref);
     fclose(f);
-#endif
 }
 
+static int default_kmer = KMER;
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
-		char *ref_seq, int ref_len, int ref_start) {
-    int i, kmer = KMER, ret = -1;
+		char *ref_seq, int ref_len, int ref_start,
+		char *cons1, char *cons2, int cons_len) {
+    int i, kmer = default_kmer, ret = -1;
     dgraph_t *g;
     haps_t *haps = NULL, *cons = NULL;
     haps_t *ref = NULL, *ref_ = NULL;
     int plus10 = 1;
 
-    dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start);
+    //dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start, cons1, cons2, cons_len);
 
     init_W128_score(-4,1);
     init_X128_score(-4,4);
@@ -3643,6 +3656,33 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     graph2dot(g, "_G.dot", 0);
 
+    // Finally try merging in the consensus, both primary and secondary,
+    // incase this makes further bubbles, which during collapse will merge
+    // in some heads/tips.
+    //
+    // NB we have no phasing on cons1/2.  Possibly a real allele may
+    // switch from cons1 to cons2 and back again, but it's a simple
+    // approximation which resolves some issues.
+    //
+    // FIXME: cons should be actual consensus with indels, rather than
+    // based on reference coordinates.  See gap5 pileup for this instead?
+    //
+    // As it stands, this doesn't improve things.  We get around 10% fewer
+    // FN, but at a cost of 10% more FP.  This doesn't fix the ~40% more FN
+    // we have vs original (unrealigned) data, so we need something more than
+    // that anyway to fix this.  Find that first. (Suspect it's left vs right
+    // alignment justification causing that and SNP vs Indel preferences.)
+#if 0
+    if (cons1) add_seq(g, cons1, cons_len, 0);
+    if (cons2) add_seq(g, cons2, cons_len, 0);
+    if (loop_check(g, 0)) {
+	// adding consensus caused loop; give up on that idea.
+	cons1 = cons2 = NULL;
+	goto bigger_kmer;
+    }
+    find_bubbles(g, 1);
+#endif
+
 
     // Strings of bases inserted between reference coords
     // permit us to generate alignments starting or ending
@@ -3788,6 +3828,13 @@ haps_t *load_fasta(char *fn, int *nhaps) {
 int main(int argc, char **argv) {
     bam_hdr_t *hdr;
     int nbams, *newpos, start, i;
+
+    if (argc > 1 && strncmp(argv[1], "-k", 2) == 0) {
+	default_kmer = atoi(argv[1]+2);
+	argc--;
+	argv++;
+    }
+
     bam1_t **bams = load_bam(argv[1], &nbams, &hdr);
 
     if (!(newpos = calloc(nbams, sizeof(*newpos))))
@@ -3798,11 +3845,11 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "===> Adding reference\n");
 	haps_t *h = load_fasta(argv[2], 0);
 	ref = h->seq;
-	start = atoi(h->name)-1;
+	start = atoi(h->name);
 	free(h);
     }
 
-    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start) < 0)
+    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0) < 0)
 	return 1;
 
     // FIXME/TODO: sort output

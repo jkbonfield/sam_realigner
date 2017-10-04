@@ -349,7 +349,7 @@ int check_overlap(bam_sorted_list *bl, int start, int *start_ovl, int *end_ovl) 
 }
 
 int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
-		 char *cons, int cons_len,
+		 char *cons, char *cons2, int cons_len,
 		 int start, int end, int start_ovl, int end_ovl,
 		 faidx_t *fai) {
     bam_sorted_item *bi, *next;
@@ -393,7 +393,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     int i;
     for (i = 0; i < count; i++)
 	new_pos[i] = ba[i]->core.pos;
-    extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_len, int ref_pos);
+    extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_len, int ref_pos, char *cons1, char *cons2, int len);
     // FIXME: compute "ref" as cigar oriented consensus? Maybe cannot
     // when deletion?
     char *ref = NULL;//get_ref(ref_pos); // fixme; shouldn't be strdup, but return ptr+len
@@ -411,7 +411,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     }
 
     //if (bam_realign(hdr, ba, count, new_pos, cons, cons_len, start_ovl) < 0) {
-    if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl) < 0) {
+    if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl, cons, cons2, cons_len) < 0) {
 	free(new_pos);
 	free(ba);
 	return -1;
@@ -592,13 +592,14 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
     int right_most = 0;
     int flush_pos = 0;
 
-    char *cons = malloc(1024);
+    char *cons = malloc(1024), *cons2 = malloc(1024);
     assert(CON_MARGIN < 1024);
-    memset(cons, 'N', 1024);
+    memset(cons,  'N', 1024);
+    memset(cons2, 'N', 1024);
     int cons_sz = 1024;
     int start_cons = -1;
 
-    if (!cons)
+    if (!cons || !cons2)
 	return -1;
 
 #define HREF "/nfs/srpipe_references/references/Human/1000Genomes_hs37d5/all/fasta/hs37d5.fa"
@@ -663,7 +664,6 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 	int left_most = n_plp ? plp[0].b->core.pos : 0;
 	int rm_tmp = right_most;
 	int freq[256] = {0};
-	unsigned char call;
 	for (i = 0; i < n_plp; i++) {
 	    if (rm_tmp == 0 || plp[i].is_head) {
 		int end_pos = bam_endpos(plp[i].b);
@@ -679,7 +679,7 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 
 	    unsigned char base = bam_seqi(bam_get_seq(plp[i].b), plp[i].qpos);
 	    base = seq_nt16_str[base]; // fixme, only helpful for debugging
-	    freq[base] += bam_get_qual(plp[i].b)[plp[i].qpos];
+	    freq[plp[i].is_del ? '*' : base] += bam_get_qual(plp[i].b)[plp[i].qpos];
 	}
 	if (has_ins > MIN_INDEL && has_ins < n_plp-MIN_INDEL)
 	    suspect |= 16;
@@ -687,22 +687,33 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 	    suspect |= 16;
 
 	// Build a consensus, used when we don't have a reference.
-	call = 'N';
+	unsigned char call = 'N', call2 = 'N';
 	if (1 || !has_del) {
-	    int mv = 0;
-	    if (mv < freq['A']) mv = freq[call = 'A'];
-	    if (mv < freq['C']) mv = freq[call = 'C'];
-	    if (mv < freq['G']) mv = freq[call = 'G'];
-	    if (mv < freq['T']) mv = freq[call = 'T'];
+	    int mv = 0, mv2 = 0;
+	    if      (mv  < freq['A']) call2 = call, mv2 = mv, mv  = freq[call  = 'A'];
+	    else if (mv2 < freq['A'])                         mv2 = freq[call2 = 'A'];
+	    if      (mv  < freq['C']) call2 = call, mv2 = mv, mv  = freq[call  = 'C'];
+	    else if (mv2 < freq['C'])                         mv2 = freq[call2 = 'C'];
+	    if      (mv  < freq['G']) call2 = call, mv2 = mv, mv  = freq[call  = 'G'];
+	    else if (mv2 < freq['G'])                         mv2 = freq[call2 = 'G'];
+	    if      (mv  < freq['T']) call2 = call, mv2 = mv, mv  = freq[call  = 'T'];
+	    else if (mv2 < freq['T'])                         mv2 = freq[call2 = 'T'];
+	    if (mv2 < freq['*'])
+		mv2 = freq[call2 = '*'];
+	    if (mv2 < 20 || mv2 < .2*mv)
+		//call2 = 'N';
+		call2 = call;
 	}
 	//fprintf(stderr, "%d %c\n", pos, call);
 	while (cons_sz < pos - start_cons+1) {
 	    cons_sz *= 2;
-	    cons = realloc(cons, cons_sz);
-	    if (!cons)
+	    cons  = realloc(cons,  cons_sz);
+	    cons2 = realloc(cons2, cons_sz);
+	    if (!cons || !cons2)
 		return -1;
 	}
-	cons[pos - start_cons] = call;
+	cons [pos - start_cons] = call;
+	cons2[pos - start_cons] = call2;
 
 	// Check for unexpectedly deep regions.
 	if (n_plp*(total_col+1) > p->over_depth * (total_depth+1))
@@ -826,7 +837,9 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
 	    } else {
 		if (left_most > end_reg && pos > end_ovl + CON_MARGIN) {
 		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", pos, start_reg, end_reg, start_ovl, end_ovl);
-		    realign_list(&cd, header, b_hist, cons + start_ovl-CON_MARGIN - start_cons,
+		    realign_list(&cd, header, b_hist,
+				 cons  + start_ovl-CON_MARGIN - start_cons,
+				 cons2 + start_ovl-CON_MARGIN - start_cons,
 				 end_ovl - start_ovl + 2*CON_MARGIN,
 				 start_reg, end_reg, start_ovl-CON_MARGIN, end_ovl+CON_MARGIN,
 				 fai);
@@ -906,6 +919,7 @@ int transcode(cram_lossy_params *p, samFile *in, samFile *out,
     }
 
     free(cons);
+    free(cons2);
 
     return 0;
 }
