@@ -11,7 +11,6 @@
 typedef int FastInt;
 #define xmalloc malloc
 #define xfree free
-#define vmessage printf
 #define MAX(a,b) ((a)>(b)?(a):(b))
 
 static FastInt (*w)[128];				/* w = W */
@@ -354,12 +353,12 @@ void display_ss(A,B,M,N,S,AP,BP)
         }
       if (a >= ALINE+50 || i >= M && j >= N)
         { *a = *b = *c = '\0';
-          vmessage("\n%5d ",50*lines++);
+          fprintf(stderr,"\n%5d ",50*lines++);
           for (b = ALINE+10; b <= a; b += 10)
-	      vmessage("    .    :");
+	      fprintf(stderr,"    .    :");
           if (b <= a+5)
-	      vmessage("    .");
-          vmessage("\n%5d %s\n      %s\n%5d %s\n",ap,ALINE,CLINE,bp,BLINE);
+	      fprintf(stderr,"    .");
+          fprintf(stderr,"\n%5d %s\n      %s\n%5d %s\n",ap,ALINE,CLINE,bp,BLINE);
 	  ap = AP + i;
 	  bp = BP + j;
           a = ALINE;
