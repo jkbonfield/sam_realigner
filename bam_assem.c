@@ -180,8 +180,8 @@ int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
     
     int score = align_ss(seq1, seq2, len1, len2, 0,0, X128, G,H, S, s1,s2,e1,e2);
 
-//    printf("Score=%d\n", score);
-//    display_ss(seq1, seq2, len1, len2, S, 0, 0);
+    fprintf(stderr, "Score=%d\n", score);
+    display_ss(seq1, seq2, len1, len2, S, 0, 0);
 
     free(seq1);
     free(seq2);
@@ -2108,7 +2108,7 @@ void validate_graph(dgraph_t *g) {
     }
 }
 
-#if 1
+#if 0
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     return 0;
 }
@@ -2224,8 +2224,8 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 	    node_t *n = hi->data.p;
 	    fprintf(fp, " n_%.*s [label=\"%.*s\", color=\"grey\", group=%d]\n",
 	    	    hi->key_len, hi->key,
-		    //MIN(MAX_GRAPH_KEY, hi->key_len), hi->key, n->id);
-		    1, hi->key + hi->key_len-1, n->id);
+		    MIN(MAX_GRAPH_KEY, hi->key_len), hi->key, n->id);
+		    //1, hi->key + hi->key_len-1, n->id);
 	    fprintf(fp, " n_%.*s -> n_%d [color=\"grey\"]\n",
 	    	    hi->key_len, hi->key, n->id);
 	    //fprintf(fp, " n_%.5s [label=\"%.*s\", color=\"grey\", group=%d]\n",
@@ -3488,6 +3488,271 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
     fclose(f);
 }
 
+// Align ref to linearised graph and copy coords over
+int assign_coords(dgraph_t *g, char *ref) {
+    int ref_len = strlen(ref);
+    node_t *n;
+    int i, j, nn = 0, nh = -1;
+
+    // Update edge 'in' counts
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned)
+	    continue;
+
+	for (j = 0; j < n->n_out; j++) {
+	    int k;
+	    node_t *n2 = g->node[n->out[j]->n[1]];
+	    for (k = 0; k < n2->n_in; k++) {
+		if (n2->in[k]->n[1] == n->id) {
+		    n2->in[k]->count = n->out[j]->count;
+		    break;
+		}
+	    }
+	}
+    }
+
+    // Find the best scoring node.
+    int best_n = 0, best_score = 0;
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned)
+	    continue;
+
+	int cnt = 0;
+	for (j = 0; j < n->n_in; j++)
+	    cnt += n->in[j]->count;
+	for (j = 0; j < n->n_out; j++)
+	    cnt += n->out[j]->count;
+
+	if (best_score < cnt) {
+	    best_score = cnt;
+	    best_n = i;
+	}
+	nn++;
+    }
+    //printf("Best node = %d (cnt %d)\n", best_n, best_score);
+    nh = best_n;
+
+    // Compute consensus vector
+    int (*v1)[5] = calloc(nn + g->kmer-1, sizeof(*v1));
+
+    // Scan backwards from here
+    n = g->node[best_n];
+    int cons_len = 0;
+    while (n) {
+	int best_i = -1;
+	best_score = 0;
+	for (i = 0; i < n->n_in; i++) {
+	    if (best_score < n->in[i]->count) {
+		best_score = n->in[i]->count;
+		best_i = i;
+	    }
+	}
+	if (best_i >= 0) {
+	    //printf("Best prev = %d\n", n->in[best_i]->n[1]);
+	    n = g->node[n->in[best_i]->n[1]];
+	    memcpy(&v1[cons_len++], n->bases[g->kmer-1], sizeof(*v1));
+	    nh = n->id;
+	} else {
+	    for (j = g->kmer-1; j > 0; j--)
+		memcpy(&v1[cons_len++], &n->bases[j-1], sizeof(*v1));
+	    n = NULL;
+	}
+    }
+
+//    // debug
+//    for (i = 0; i < cons_len; i++) {
+//	printf("%2d:", i);
+//	int k;
+//	for (k = 0; k < 5; k++)
+//	    printf(" %d", v1[i][k]);
+//	printf("\n");
+//    }
+//    puts("---rev---");
+
+    // Reverse v1, added so far in backwards direction
+    for (i = 0, j = cons_len-1; i < j; i++, j--) {
+	int k;
+	for (k = 0; k < 5; k++) {
+	    int tmp = v1[i][k];
+	    v1[i][k] = v1[j][k];
+	    v1[j][k] = tmp;
+	}
+    }
+
+    // Scan downwards
+    n = g->node[best_n];
+    while (n) {
+	memcpy(&v1[cons_len++], &n->bases[g->kmer-1], sizeof(*v1));
+
+	int best_i = -1;
+	best_score = 0;
+	for (i = 0; i < n->n_out; i++) {
+	    if (best_score < n->out[i]->count) {
+		best_score = n->out[i]->count;
+		best_i = i;
+	    }
+	}
+	if (best_i >= 0) {
+	    //printf("Best next = %d\n", n->out[best_i]->n[1]);
+	    n = g->node[n->out[best_i]->n[1]];
+	} else {
+	    n = NULL;
+	}
+    }
+
+//    // debug
+//    for (i = 0; i < cons_len; i++) {
+//	printf("%2d:", i);
+//	int k;
+//	for (k = 0; k < 5; k++)
+//	    printf(" %d", v1[i][k]);
+//	printf("\n");
+//    }
+
+    // Align against reference seq
+    char *cons = vec2seq(v1, cons_len);
+    //puts(cons);
+
+    int *S = malloc((cons_len + ref_len) * sizeof(*S));
+
+    int score = align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 1,3, S, 1,1,1,1);
+//    printf("Score=%d\n", score);
+//    display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
+//    fflush(stdout);
+
+    // Copy aligned coords from alignment to graph
+    n = g->node[nh];
+    int op;
+    int x1 = 0, x2 = 0, *S2 = S, k = g->kmer-1;
+    
+    while (x1 < cons_len && x2 < ref_len) {
+	int op = *S2++;
+	if (op == 0) {
+	    // match
+	    //printf("%2d: %c %c = %d\n", n?n->id:-1, cons[x1], ref[x2], x2);
+	    if (n) n->pos = x2-(g->kmer-1);
+	    if (k > 0) {
+		k--;
+	    } else if (n) {
+		int best_i = -1;
+		best_score = 0;
+		for (i = 0; i < n->n_out; i++) {
+		    if (best_score < n->out[i]->count) {
+			best_score = n->out[i]->count;
+			best_i = i;
+		    }
+		}
+		n = best_i >= 0 ? g->node[n->out[best_i]->n[1]] : NULL;
+	    }
+	    x1++; x2++;
+	} else if (op < 0) {
+	    // ins in cons
+	    while (op++) {
+		//printf("%2d: %c -\n", n?n->id:-1, cons[x1]);
+		x1++;
+		if (k > 0) {
+		    k--;
+		} else if (n) {
+		    int best_i = -1;
+		    best_score = 0;
+		    for (i = 0; i < n->n_out; i++) {
+			if (best_score < n->out[i]->count) {
+			    best_score = n->out[i]->count;
+			    best_i = i;
+			}
+		    }
+		    n = best_i >= 0 ? g->node[n->out[best_i]->n[1]] : NULL;
+		}
+	    }
+	} else {
+	    // del in cons
+	    if (n) n->pos = x2-(g->kmer-1);
+	    while (op--) {
+		//printf("%2d: - %c\n", n?n->id:-1, ref[x2]);
+		x2++;
+	    }
+	}
+    }
+    //printf("n=%d n_out=%d, x1=%d/%d x2=%d/%d\n", n ? n->id : -1, n ? n->n_out : -1, x1, cons_len, x2, ref_len);
+
+    free(cons);
+    free(S);
+
+    graph2dot(g, "c.dot", 0);
+
+    return 0;
+}
+
+
+//#define REVERSE
+//
+// We can simulate left-justified alignments instead of our
+// current right justified ones by reversing the reference and
+// bam records, doing the alignments, and then reversing back
+// again.
+//
+// This is a bizarre hack, but it's easier than producing left
+// justified alignments because the cause of right justification
+// currently is through having the node position being the last
+// base in the kmer instead of the first.  Change that is
+// substantial work, so this is just a quick test to judge whether
+// it is worth while doing.  (It isn't)
+
+#ifdef REVERSE
+void bam_reverse(bam_hdr_t *hdr, bam1_t *b) {
+    int j, k;
+
+    // Swap sequence in plac e
+    uint8_t *iseq = bam_get_seq(b);
+    int odd;
+    if ((odd = (b->core.l_qseq & 1))) {
+	// Odd number; start by shifting right by a nibble:
+	// AB CD EF G-
+	// GF ED CB A-
+	for (j = b->core.l_qseq/2; j > 0; j--) {
+	    // AB CD EF G- to
+	    // -A BC DE FG
+	    iseq[j] = (iseq[j] >> 4) | (iseq[j-1] << 4);
+	}
+	iseq[0] >>= 4;
+	b->core.l_qseq++;
+    }
+    // followed by reversal:
+    // -A BC DE FG to    or AB CD EF GH to
+    // GF ED CB A-          HG FE DC BA
+    for (j = 0, k = b->core.l_qseq/2-1; j < k; j++, k--) {
+	uint8_t t = iseq[j];
+	iseq[j] = (iseq[k] >> 4) | (iseq[k] << 4);
+	iseq[k] = (t >> 4) | (t << 4);
+    }
+    if (odd) b->core.l_qseq--;
+    
+
+    // Swap position
+    b->core.pos = hdr->target_len[b->core.tid] - bam_endpos(b);
+
+    if (b->core.flag & BAM_FUNMAP)
+	return;
+
+    // Swap cigar
+    uint32_t *cig = bam_get_cigar(b);
+    for (j = 0, k = b->core.n_cigar-1; j < k; j++, k--)  {
+	uint32_t tmp = cig[j];
+	cig[j] = cig[k];
+	cig[k] = tmp;
+    }
+}
+
+void bam_reverse_array(bam_hdr_t *hdr, bam1_t **bam, int nbams) {
+    int i;
+    for (i = 0; i < nbams; i++)
+	bam_reverse(hdr, bam[i]);
+}
+#endif
+
+
 static int default_kmer = KMER;
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *ref_seq, int ref_len, int ref_start,
@@ -3500,6 +3765,29 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     //dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start, cons1, cons2, cons_len);
 
+#ifdef REVERSE
+    fprintf(stderr, "\nPOS1:\t");
+    for (i = 0; i < nbams; i++)
+	fprintf(stderr, "%d\t", bams[i]->core.pos);
+    fprintf(stderr, "\n");
+
+    int *orig_pos = malloc(nbams *sizeof(int));
+    for (i = 0; i < nbams; i++)
+	orig_pos[i] = bams[i]->core.pos;
+
+    bam_reverse_array(hdr, bams, nbams);
+    ref_start = hdr->target_len[bams[0]->core.tid] - (ref_start+ref_len);
+    if (ref_seq) {
+	int i, j;
+	ref_seq = strdup(ref_seq);
+	for (i = 0, j = ref_len-1; i < j; i++, j--) {
+	    char c = ref_seq[i];
+	    ref_seq[i] = ref_seq[j];
+	    ref_seq[j] = c;
+	}
+    }
+#endif
+    
     init_W128_score(-4,1);
     init_X128_score(-4,4);
 
@@ -3683,6 +3971,14 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     find_bubbles(g, 1);
 #endif
 
+    // Map the graph to the reference.  We previously did this by
+    // adding the reference as a sequence and collapsing bubbles
+    // again, but this sometimes causes more issues.  Now we try
+    // the alternative approach of producing the primary linear path
+    // through the graph representing the bulk of the data and then
+    // align that as a whole to the reference.
+    //assign_coords(g, ref->seq);
+
 
     // Strings of bases inserted between reference coords
     // permit us to generate alignments starting or ending
@@ -3721,6 +4017,28 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     ret = 0;
  err:
+
+#ifdef REVERSE
+    // And fixup new_pos too
+    for (i = 0; i < nhaps; i++)
+	bams[i]->core.pos = new_pos[i];
+    bam_reverse_array(hdr, bams, nbams);
+    for (i = 0; i < nhaps; i++) {
+	bam1_t *b = bams[i];
+	new_pos[i] = b->core.pos;
+	b->core.pos = orig_pos[i];
+    }
+
+    fprintf(stderr, "\nPOS2:\t");
+    for (i = 0; i < nbams; i++)
+	fprintf(stderr, "%d\t", bams[i]->core.pos);
+	//fprintf(stderr, "%d\t", new_pos[i]);
+    fprintf(stderr, "\n");
+    fflush(stderr);
+    free(orig_pos);
+    free(ref_seq); // we strduped it
+#endif
+
     graph_destroy(g);
     free_haps(haps, nhaps);
     free_haps(cons, 1);
