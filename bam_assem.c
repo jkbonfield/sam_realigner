@@ -247,6 +247,8 @@ typedef struct node_t {
     // Path tracking for breadth first search.
     //int path_id;
     // in[0] will be swapped around to ensure it is always the path parent.
+
+    int above, below;
 } node_t;
 
 typedef struct edge {
@@ -724,13 +726,13 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 	    node_t *n2 = g->node[e->n[1]];
 	    // FIXME: detect possible loops here. Ref must be a clean pass through!
 	    //n1->pos = i+g->kmer-1;
-	    if (ref & IS_REF)
-		n1->pos = i;
+//	    if (ref & IS_REF)
+//		n1->pos = i;
 	    n1->ref |= ref;
 	    
 	    //n2->pos = i+g->kmer;
-	    if (ref & IS_REF)
-		n2->pos = i+1;
+//	    if (ref & IS_REF)
+//		n2->pos = i+1;
 	    n2->ref |= ref;
 	}
     }
@@ -1559,101 +1561,6 @@ void find_bubbles(dgraph_t *g, int use_ref) {
     } while (found);
 }
 
-// Should be run on a collapsed graph without bubbles.
-// Any forks should only have one route that follows the reference.
-void find_insertions(dgraph_t *g) {
-    int i, j;
-
-    // Find ref boundaries
-    int r_min = INT_MAX, r_max = INT_MIN;
-    for (i = 0; i < g->nnodes; i++) {
-	node_t *n = g->node[i];
-	if (n->pruned || n->pos == INT_MIN)
-	    continue;
-	if (r_min > n->pos)
-	    r_min = n->pos;
-	if (r_max < n->pos)
-	    r_max = n->pos;
-    }
-    if (r_min == INT_MAX)
-	return;
-
-    fprintf(stderr, "Ref covered %d to %d\n", r_min, r_max);
-
-    for (i = 0; i < g->nnodes; i++)
-	g->node[i]->visited = 0;
-
-    for (i = 0; i < g->nnodes; i++) {
-	if (/*g->node[i]->n_in != 0 ||*/ g->node[i]->pruned || g->node[i]->visited)
-	    continue;
-
-	// Found a starting point, so scan forward from here.
-	node_t *n = g->node[i];
-	while (n && n->pos != INT_MIN) {
-	    n->visited = 1;
-	    for (j = 0; j < n->n_out; j++) {
-		if (g->node[n->out[j]->n[1]]->pos != INT_MIN)
-		    break;
-	    }
-	    if (j == n->n_out)
-		break;
-
-	    n = g->node[n->out[j]->n[1]];
-	}
-
-	if (n->pos == INT_MIN)
-	    continue;
-
-	int pass, ins_count = 0, end_pos = 0;
-	for (pass = 0; pass < 2; pass++) {
-	    node_t *nr_1 = n;    // last-ref and 1st-insertion
-	    node_t *ni_1 = NULL;
-	    for (j = 0; j < n->n_out; j++) {
-		node_t *t = g->node[n->out[j]->n[1]];
-		if (t->ref & IS_CON)
-		    ni_1 = t;
-	    }
-
-	    if (!ni_1)
-		continue;
-
-	    // Find the other end of the insertion, if it exists
-	    node_t *ni_2 = ni_1, *nr_2 = NULL;
-	    do {
-		if (ni_2->visited)
-		    break;
-
-		if (pass > 0) {
-		    ni_2->ins = ++ins_count;
-		    ni_2->pos = end_pos;
-		}
-
-		node_t *tmp = NULL;
-		for (j = 0; j < ni_2->n_out; j++) {
-		    node_t *t = g->node[ni_2->out[j]->n[1]];
-		    if (t->pos != INT_MIN) {
-			nr_2 = t;
-			break;
-		    } else if ((t->ref & IS_CON) || !n) {
-			tmp = t;
-		    }
-		}
-		if (nr_2)
-		    break;
-		ni_2 = tmp;
-	    } while (ni_2);
-
-	    if (!nr_2)
-		continue;
-
-	    fprintf(stderr, "ins from %d(%d) to (%d)%d\n",
-		    nr_1->id, ni_1->id, ni_2->id, nr_2->id);
-	    end_pos = nr_2->pos;
-	}
-    }
-}
-
-
 int tag_tail_from(dgraph_t *g, int parent, int id) {
     printf("Check tail at node %d->%d\n", parent, id);
 
@@ -2087,6 +1994,7 @@ void validate_graph(dgraph_t *g) {
 	if (n->pruned)
 	    continue;
 
+	int above = -1;
 	for (j = 0; j < n->n_in; j++) {
 	    //assert(n->in[j]->n[0] == n->id);
 	    node_t *p = g->node[n->in[j]->n[1]];
@@ -2094,7 +2002,11 @@ void validate_graph(dgraph_t *g) {
 		if (p->out[k]->n[1] == n->id)
 		    break;
 	    assert(k < p->n_out);
+	    if (above < p->above)
+		above = p->above;
 	}
+	//assert(n->above == above+1 || (above <= 0 && n->above == 0));
+	assert(n->above > above || (above <= 0 && n->above == 0));
 
 
 	for (j = 0; j < n->n_out; j++) {
@@ -2156,7 +2068,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 //		n->id);
 
 
-	fprintf(fp, "  n_%d [label=\"%d @ %d x %d", n->id, n->id, n->pos, n->count);
+	fprintf(fp, "  n_%d [label=\"%d @ %d.%d x %d, ^%d", n->id, n->id, n->pos, n->ins, n->count, n->above);
 	//if (n->ins) fprintf(fp, ".%d", n->ins);
 	//fprintf(fp, "  n_%d [label=\"%d", n->id, n->id);
 	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
@@ -2214,7 +2126,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 #  define MIN(a,b) ((a)<(b)?(a):(b))
 #endif
 
-#define MAX_GRAPH_KEY 100
+#define MAX_GRAPH_KEY 10
 
 #if 1
 	// Hash key -> node map
@@ -2737,9 +2649,9 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     if (!S)
 	return -1;
     align_ss(ref, cons, len, clen, 0, 0, X128, GOPEN,GEXT, S, 1,1,1,1);
-    //fprintf(stderr, "Ref=%s\n", ref);
-    //fprintf(stderr, "Con=%s\n", cons);
-    //display_ss(ref, cons, len, clen, S, 0, 0);
+    fprintf(stderr, "Ref=%s\n", ref);
+    fprintf(stderr, "Con=%s\n", cons);
+    display_ss(ref, cons, len, clen, S, 0, 0);
     //fflush(stderr);
     //fflush(stdout);
 
@@ -3430,6 +3342,90 @@ haps_t *compute_consensus(dgraph_t *g) {
     return h;
 }
 
+// Use the n->above fields to compute the consensus from the path
+// with longest/most use.
+void compute_consensus_above(dgraph_t *g, char *ref) {
+    int i, j;
+    node_t *n;
+    char *seq = malloc(g->nnodes + g->kmer + 1);
+    int *nnum = malloc((g->nnodes + g->kmer + 1)*sizeof(int));
+
+    // Find trailing node with highest above count.
+    int above = 0, end_n = 0, start_n;
+    for (i = 0; i < g->nnodes; i++) {
+	n = g->node[i];
+	if (n->pruned || n->n_out)
+	    continue;
+	if (above < n->above)
+	    above = n->above, end_n = n->id;
+    }
+
+    // Recurse up
+    n = g->node[end_n];
+    j = g->nnodes + g->kmer + 1;
+    seq[--j] = 0;
+    nnum[j] = -1;
+
+    while (n) {
+	if (islower(vec2X(n->bases[g->kmer-1])))
+	    seq[--j] = tolower(n->hi[0]->key[g->kmer-1]);
+	else
+	    seq[--j] = n->hi[0]->key[g->kmer-1];
+	nnum[j] = n->id;
+
+	for (above = i = 0; i < n->n_in; i++) {
+	    node_t *p = g->node[n->in[i]->n[1]];
+	    if (above <= p->above)
+		above = p->above, start_n = n->in[i]->n[1];
+	}
+	n = n->n_in ? g->node[start_n] : NULL;
+    }
+
+    ref += g->kmer-1;
+    fprintf(stderr, "Cons from node %d to %d: %s\nRef %s\n", start_n, end_n, &seq[j], ref);
+
+    // Compare vs ref.
+    char *cons = seq+j;
+    int *cid = nnum+j;
+    int cons_len = strlen(cons);
+    int ref_len = strlen(ref);
+    int *S = malloc((cons_len + ref_len) * sizeof(*S));
+    align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 1,3, S, 1,1,1,1);
+    display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
+
+    int x1 = 0, x2 = 0, *S2 = S;
+    while (x1 < cons_len || x2 < ref_len) {
+	int op = *S2++;
+	if (op == 0) {
+	    // Match
+	    fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
+	    g->node[cid[x1]]->pos=x2;
+	    g->node[cid[x1]]->ins=0;
+	    x1++, x2++;
+	} else if (op < 0) {
+	    // Insertion in consensus
+	    int ival = 0;
+	    while (op++) {
+		g->node[cid[x1]]->pos=x2;
+		g->node[cid[x1]]->ins=++ival;
+		fprintf(stderr, "%c - @ %d %d.%d\n", cons[x1], cid[x1], x2, ival);
+		x1++;
+	    }
+	} else if (op > 0) {
+	    // Deletion in consensus
+	    while (op--) {
+		fprintf(stderr, "- %c () %d\n", ref[x2], x2);
+		x2++;
+	    }
+	}
+    }
+
+    free(S);
+
+    free(seq);
+    free(nnum);
+}
+
 haps_t *bam2haps(bam1_t **bams, int nrecs) {
     int i;
     haps_t *haps = malloc(sizeof(*haps) * nrecs);
@@ -3488,200 +3484,97 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
     fclose(f);
 }
 
-// Align ref to linearised graph and copy coords over
-int assign_coords(dgraph_t *g, char *ref) {
-    int ref_len = strlen(ref);
-    node_t *n;
-    int i, j, nn = 0, nh = -1;
+// Add 'number of nodes above' and 'number of nodes below' figures to
+// every node.  If we have an incoming fork, number of nodes above is
+// the MAX of left & right incoming forks.  Similar for nodes below
+// and outgoing fork.
+//
+// Then once we have that, starting from any node in the graph, head
+// all the way down taking the highest number going down, then all the
+// way up. At this point we're now furthest up the graph.  Head down
+// once more and we're now furthest point at bottom.  Ie down, up,
+// down with the final "up, down" being the longest consensus path.
 
-    // Update edge 'in' counts
+// Recurse down from n incrementing n->above as we go.
+// On an out-fork follow both routes.
+// On an in-fork, push the node onto the queue of nodes to-do (if
+// it appears we have a higher count) and return.
+void number_nodes_above_recurse(dgraph_t *g, node_t *n, int *queue, int *nqueue, int qn) {
+    // Starting point, 1 more than previously.
+    int i, count = 0, first = 1;
+
+    // FIXME: try summing n->count instead of +1 per layer
+    for (i = 0; i < n->n_in; i++)
+	//if (count < g->node[n->in[i]->n[1]]->above + 1)
+	//    count = g->node[n->in[i]->n[1]]->above + 1;
+	if (count < g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1)
+	    count = g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1;
+
+    fprintf(stderr, "node %d, count %d, in %d, out %d\n", n->id, count, n->n_in, n->n_out);
+
+    while (n) {
+	first--;
+	int curr_above = n->above;
+	if (n->above < count)
+	    n->above = count;
+	//count++;
+	count += n->count+1;
+	if (n->n_in > 1) {
+	    int c2 = n->above;
+	    for (i = 0; i < n->n_in; i++) {
+		//if (c2 < g->node[n->in[i]->n[1]]->above + 1)
+		//    c2 = g->node[n->in[i]->n[1]]->above + 1;
+		if (c2 < g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1)
+		    c2 = g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1;
+	    }
+	    if (c2 > curr_above) {
+		n->above = c2;
+		for (i = qn; i < *nqueue; i++)
+		    if (queue[i] == n->id)
+			break;
+		if (i == *nqueue)
+		    queue[(*nqueue)++] = n->id;
+		assert(*nqueue < g->nnodes);
+	    }
+	    if (first < 0)
+		return;
+	}
+
+	if (n->n_out <= 0)
+	    break;
+
+	if (n->n_out == 1) {
+	    n = g->node[n->out[0]->n[1]];
+	    continue;
+	} else {
+	    for (i = 0; i < n->n_out; i++)
+		number_nodes_above_recurse(g, g->node[n->out[i]->n[1]], queue, nqueue, qn);
+	    break;
+	}
+    }
+}
+
+int number_nodes_above(dgraph_t *g) {
+    int i;
+    int *queue = malloc(g->nnodes * sizeof(int));
+    int nqueue = 0;
+
+    // Build a queue of starting points
     for (i = 0; i < g->nnodes; i++) {
 	node_t *n = g->node[i];
-	if (n->pruned)
+	if (n->pruned || n->n_in != 0)
 	    continue;
-
-	for (j = 0; j < n->n_out; j++) {
-	    int k;
-	    node_t *n2 = g->node[n->out[j]->n[1]];
-	    for (k = 0; k < n2->n_in; k++) {
-		if (n2->in[k]->n[1] == n->id) {
-		    n2->in[k]->count = n->out[j]->count;
-		    break;
-		}
-	    }
-	}
+	queue[nqueue++] = i;
+	n->above = 0;
     }
 
-    // Find the best scoring node.
-    int best_n = 0, best_score = 0;
-    for (i = 0; i < g->nnodes; i++) {
-	node_t *n = g->node[i];
-	if (n->pruned)
-	    continue;
-
-	int cnt = 0;
-	for (j = 0; j < n->n_in; j++)
-	    cnt += n->in[j]->count;
-	for (j = 0; j < n->n_out; j++)
-	    cnt += n->out[j]->count;
-
-	if (best_score < cnt) {
-	    best_score = cnt;
-	    best_n = i;
-	}
-	nn++;
-    }
-    //printf("Best node = %d (cnt %d)\n", best_n, best_score);
-    nh = best_n;
-
-    // Compute consensus vector
-    int (*v1)[5] = calloc(nn + g->kmer-1, sizeof(*v1));
-
-    // Scan backwards from here
-    n = g->node[best_n];
-    int cons_len = 0;
-    while (n) {
-	int best_i = -1;
-	best_score = 0;
-	for (i = 0; i < n->n_in; i++) {
-	    if (best_score < n->in[i]->count) {
-		best_score = n->in[i]->count;
-		best_i = i;
-	    }
-	}
-	if (best_i >= 0) {
-	    //printf("Best prev = %d\n", n->in[best_i]->n[1]);
-	    n = g->node[n->in[best_i]->n[1]];
-	    memcpy(&v1[cons_len++], n->bases[g->kmer-1], sizeof(*v1));
-	    nh = n->id;
-	} else {
-	    for (j = g->kmer-1; j > 0; j--)
-		memcpy(&v1[cons_len++], &n->bases[j-1], sizeof(*v1));
-	    n = NULL;
-	}
+    // Recurse down each node in queue, adding new ones as we see fit.
+    for (i = 0; i < nqueue; i++) {
+	node_t *n = g->node[queue[i]];
+	number_nodes_above_recurse(g, n, queue, &nqueue, i);
     }
 
-//    // debug
-//    for (i = 0; i < cons_len; i++) {
-//	printf("%2d:", i);
-//	int k;
-//	for (k = 0; k < 5; k++)
-//	    printf(" %d", v1[i][k]);
-//	printf("\n");
-//    }
-//    puts("---rev---");
-
-    // Reverse v1, added so far in backwards direction
-    for (i = 0, j = cons_len-1; i < j; i++, j--) {
-	int k;
-	for (k = 0; k < 5; k++) {
-	    int tmp = v1[i][k];
-	    v1[i][k] = v1[j][k];
-	    v1[j][k] = tmp;
-	}
-    }
-
-    // Scan downwards
-    n = g->node[best_n];
-    while (n) {
-	memcpy(&v1[cons_len++], &n->bases[g->kmer-1], sizeof(*v1));
-
-	int best_i = -1;
-	best_score = 0;
-	for (i = 0; i < n->n_out; i++) {
-	    if (best_score < n->out[i]->count) {
-		best_score = n->out[i]->count;
-		best_i = i;
-	    }
-	}
-	if (best_i >= 0) {
-	    //printf("Best next = %d\n", n->out[best_i]->n[1]);
-	    n = g->node[n->out[best_i]->n[1]];
-	} else {
-	    n = NULL;
-	}
-    }
-
-//    // debug
-//    for (i = 0; i < cons_len; i++) {
-//	printf("%2d:", i);
-//	int k;
-//	for (k = 0; k < 5; k++)
-//	    printf(" %d", v1[i][k]);
-//	printf("\n");
-//    }
-
-    // Align against reference seq
-    char *cons = vec2seq(v1, cons_len);
-    //puts(cons);
-
-    int *S = malloc((cons_len + ref_len) * sizeof(*S));
-
-    int score = align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 1,3, S, 1,1,1,1);
-//    printf("Score=%d\n", score);
-//    display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
-//    fflush(stdout);
-
-    // Copy aligned coords from alignment to graph
-    n = g->node[nh];
-    int op;
-    int x1 = 0, x2 = 0, *S2 = S, k = g->kmer-1;
-    
-    while (x1 < cons_len && x2 < ref_len) {
-	int op = *S2++;
-	if (op == 0) {
-	    // match
-	    //printf("%2d: %c %c = %d\n", n?n->id:-1, cons[x1], ref[x2], x2);
-	    if (n) n->pos = x2-(g->kmer-1);
-	    if (k > 0) {
-		k--;
-	    } else if (n) {
-		int best_i = -1;
-		best_score = 0;
-		for (i = 0; i < n->n_out; i++) {
-		    if (best_score < n->out[i]->count) {
-			best_score = n->out[i]->count;
-			best_i = i;
-		    }
-		}
-		n = best_i >= 0 ? g->node[n->out[best_i]->n[1]] : NULL;
-	    }
-	    x1++; x2++;
-	} else if (op < 0) {
-	    // ins in cons
-	    while (op++) {
-		//printf("%2d: %c -\n", n?n->id:-1, cons[x1]);
-		x1++;
-		if (k > 0) {
-		    k--;
-		} else if (n) {
-		    int best_i = -1;
-		    best_score = 0;
-		    for (i = 0; i < n->n_out; i++) {
-			if (best_score < n->out[i]->count) {
-			    best_score = n->out[i]->count;
-			    best_i = i;
-			}
-		    }
-		    n = best_i >= 0 ? g->node[n->out[best_i]->n[1]] : NULL;
-		}
-	    }
-	} else {
-	    // del in cons
-	    if (n) n->pos = x2-(g->kmer-1);
-	    while (op--) {
-		//printf("%2d: - %c\n", n?n->id:-1, ref[x2]);
-		x2++;
-	    }
-	}
-    }
-    //printf("n=%d n_out=%d, x1=%d/%d x2=%d/%d\n", n ? n->id : -1, n ? n->n_out : -1, x1, cons_len, x2, ref_len);
-
-    free(cons);
-    free(S);
-
-    graph2dot(g, "c.dot", 0);
-
+    free(queue);
     return 0;
 }
 
@@ -3942,8 +3835,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     find_bubbles(g, 1);
     assert(loop_check(g, 0) == 0);
 
-    graph2dot(g, "_G.dot", 0);
-
     // Finally try merging in the consensus, both primary and secondary,
     // incase this makes further bubbles, which during collapse will merge
     // in some heads/tips.
@@ -3977,14 +3868,9 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // the alternative approach of producing the primary linear path
     // through the graph representing the bulk of the data and then
     // align that as a whole to the reference.
-    //assign_coords(g, ref->seq);
-
-
-    // Strings of bases inserted between reference coords
-    // permit us to generate alignments starting or ending
-    // inside the insertions.
-    find_insertions(g);
-    //graph2dot(g, "_I.dot", 0);
+    number_nodes_above(g);
+    compute_consensus_above(g, ref->seq);
+    graph2dot(g, "_G.dot", 0);
 
     //fprintf(stderr, "Pruning\n");
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);
