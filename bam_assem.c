@@ -2729,6 +2729,8 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	int left_trim = 0;
 	int left_shift = 0;
 	bam1_t *b = bams[i];
+	if (b->core.flag & BAM_FUNMAP)
+	    continue;
 	uint32_t STR = str[new_pos[i]+1-start];
 	if (new_pos[i] > start)
 	    STR |= str[new_pos[i]-start-1]; // incase we start in an insertion
@@ -2747,7 +2749,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    cig_str = realloc(cig_str, cig_str_len);
 	    assert(cig_str);
 	}
-	cig_str_ind = 0;
+	cig_ind = cig_str_ind = 0;
 	//for (sp = 0, rp = b->core.pos; sp < b->core.l_qseq; ) {
 	for (sp = 0, rp = new_pos[i]; sp < b->core.l_qseq; ) {
 	    char sbase = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, sp)];
@@ -3367,10 +3369,7 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     nnum[j] = -1;
 
     while (n) {
-	if (islower(vec2X(n->bases[g->kmer-1])))
-	    seq[--j] = tolower(n->hi[0]->key[g->kmer-1]);
-	else
-	    seq[--j] = n->hi[0]->key[g->kmer-1];
+	seq[--j] = vec2X(n->bases[g->kmer-1]);
 	nnum[j] = n->id;
 
 	for (above = i = 0; i < n->n_in; i++) {
@@ -3382,7 +3381,7 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     }
 
     ref += g->kmer-1;
-    fprintf(stderr, "Cons from node %d to %d: %s\nRef %s\n", start_n, end_n, &seq[j], ref);
+    //fprintf(stderr, "Cons from node %d to %d: %s\nRef %s\n", start_n, end_n, &seq[j], ref);
 
     // Compare vs ref.
     char *cons = seq+j;
@@ -3390,15 +3389,15 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     int cons_len = strlen(cons);
     int ref_len = strlen(ref);
     int *S = malloc((cons_len + ref_len) * sizeof(*S));
-    align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 1,3, S, 1,1,1,1);
-    display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
+    align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 4,1, S, 1,1,1,1);
+    //display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
 
     int x1 = 0, x2 = 0, *S2 = S;
     while (x1 < cons_len || x2 < ref_len) {
 	int op = *S2++;
 	if (op == 0) {
 	    // Match
-	    fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
+	    //fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
 	    g->node[cid[x1]]->pos=x2;
 	    g->node[cid[x1]]->ins=0;
 	    x1++, x2++;
@@ -3408,13 +3407,13 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
 	    while (op++) {
 		g->node[cid[x1]]->pos=x2;
 		g->node[cid[x1]]->ins=++ival;
-		fprintf(stderr, "%c - @ %d %d.%d\n", cons[x1], cid[x1], x2, ival);
+		//fprintf(stderr, "%c - @ %d %d.%d\n", cons[x1], cid[x1], x2, ival);
 		x1++;
 	    }
 	} else if (op > 0) {
 	    // Deletion in consensus
 	    while (op--) {
-		fprintf(stderr, "- %c () %d\n", ref[x2], x2);
+		//fprintf(stderr, "- %c () %d\n", ref[x2], x2);
 		x2++;
 	    }
 	}
@@ -4049,7 +4048,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "===> Adding reference\n");
 	haps_t *h = load_fasta(argv[2], 0);
 	ref = h->seq;
-	start = atoi(h->name);
+	start = atoi(h->name)-1;
 	free(h);
     }
 
