@@ -220,6 +220,10 @@ typedef struct haps {
 #  define MAX_EDGE 16
 #endif
 
+#ifndef MIN_STR
+#  define MIN_STR 3
+#endif
+
 #define GAP_OPEN 3
 #define GAP_EXTEND 1
 
@@ -2699,6 +2703,9 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     str = calloc(len, sizeof(*str));
 
     DL_FOREACH_SAFE(reps, elt, tmp) {
+	if (elt->end - elt->start + 1 < MIN_STR)
+	    continue;
+
 	// If any of STR spans an observed indel, then mark it, otherwise
 	// we're happy to keep alignments against this region.
 	int left  = elt->start-5 < 0 ? 0 : elt->start-5;
@@ -3875,6 +3882,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);
 
 #if 0
+    int orig_unmapped = 0;
+    for (i = 0; i < nhaps; i++)
+	orig_unmapped += (bams[i]->core.flag & BAM_FUNMAP) ? 1 : 0;
+
     int unmapped = 0;
     for (i = 0; i < nhaps; i++) {
 	int fl = bams[i]->core.flag;
@@ -3884,7 +3895,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	bams[i]->core.flag = fl;
     }
 
-    if (unmapped < .2*nhaps) {
+    // Fail if > 20% of the previously mapped reads become unmapped.
+    if ((nhaps-unmapped) >= .9*(nhaps-orig_unmapped)) {
 	for (i = 0; i < nhaps; i++) {
 	    if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 1) < 0)
 		goto err;
