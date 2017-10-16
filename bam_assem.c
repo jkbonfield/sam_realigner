@@ -221,7 +221,7 @@ typedef struct haps {
 #endif
 
 #ifndef MIN_STR
-#  define MIN_STR 3
+#  define MIN_STR 0
 #endif
 
 #define GAP_OPEN 3
@@ -273,6 +273,8 @@ typedef struct {
 
     string_alloc_t *spool;
 } dgraph_t;
+
+void validate_graph(dgraph_t *g);
 
 //---------------------------------------------------------------------------
 // Paths
@@ -880,7 +882,7 @@ void prune_heads(dgraph_t *g, int min_count) {
 
 // Node n_end has parents p1 and p2 which meet up again at some common
 // node n_start.  Find n_start.
-void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
+int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     node_t **path1 = malloc(g->nnodes * sizeof(node_t *));
     node_t **path2 = malloc(g->nnodes * sizeof(node_t *));
     int np1 = 0, np2 = 0, i, j;
@@ -926,6 +928,12 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	path2[np2++] = n;
 	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
     }
+
+    if (!np1 && !np2) {
+	free(path1);
+	free(path2);
+	return -1;
+    }
     
 
 //    // Report
@@ -958,7 +966,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	l = n;
 	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
     }
-    for (i = g->kmer-2; i >= 0; i--)
+    for (i = g->kmer-2; l && i >= 0; i--)
 	memcpy(v1[len1++], l->bases[i], 5*sizeof(int));
 
     n = p2;
@@ -968,7 +976,7 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	l = n;
 	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
     }
-    for (i = g->kmer-2; i >= 0; i--)
+    for (i = g->kmer-2; l && i >= 0; i--)
 	memcpy(v2[len2++], l->bases[i], 5*sizeof(int));
 
     int *S = malloc((len1+len2)*sizeof(int));
@@ -1320,6 +1328,8 @@ void node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	sprintf(buf, "_bub%d.dot", n++);
 	graph2dot(g, buf, 0);
     }
+
+    return 0;
 }
 
 // Any paths that include 'n' and are below 'n_end' have been
@@ -1368,7 +1378,7 @@ void rewind_paths(dgraph_t *g, path_t **phead, int n_id, node_t *n_end) {
 // As we progress one node at a time per path, we check 'visited'.
 // If this is set, then we know we have a bubble and can tell
 // which paths are involved.
-int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
+int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth) {
     int p_id = 1;
     int i, v;
     path_t *head = path_create(p_id++);
@@ -1424,6 +1434,10 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
 			//printf("Skipping ref edge %d to %d\n", n->id, n->out[i]->n[1]);
 			continue;
 		    }
+		    
+		    if (g->node[n->out[i]->n[1]]->count < min_depth)
+			continue; // skip pointless paths
+
 		    //printf("New path starting at %d\n", n->out[i]->n[1]);
 		    path_t *p2 = path_create(p_id++);
 		    p2->n = g->node[n->out[i]->n[1]];
@@ -1535,7 +1549,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref) {
     return ret;
 }
 
-void find_bubbles(dgraph_t *g, int use_ref) {
+void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
     int i, found;
 
     do {
@@ -1553,7 +1567,7 @@ void find_bubbles(dgraph_t *g, int use_ref) {
 	    if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
 		//printf("Graph start at %d\n", i);
 
-		int b = find_bubble_from2(g, i, use_ref);
+		int b = find_bubble_from2(g, i, use_ref, min_depth);
 
 		if (b) {
 		    found += b;
@@ -1563,6 +1577,47 @@ void find_bubbles(dgraph_t *g, int use_ref) {
 	    }
 	}
     } while (found);
+}
+
+void prune_edges(dgraph_t *g, int min_count) {
+    int i, j, k;
+
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned)
+	    continue;
+
+	for (j = k = 0; j < n->n_in; j++) {
+	    node_t *x = g->node[n->in[j]->n[1]];
+	    if (x->count < min_count) {
+		int k, l;
+		for (k = l = 0; k < x->n_out; k++)
+		    if (x->out[k]->n[1] != n->id)
+			x->out[l++] = x->out[k];
+		x->n_out = l;
+		continue;
+	    }
+	    n->in[k++] = n->in[j];
+	}
+	n->n_in = k;
+
+	for (j = k = 0; j < n->n_out; j++) {
+	    node_t *x = g->node[n->out[j]->n[1]];
+	    if (x->count < min_count) {
+		int k, l;
+		for (k = l = 0; k < x->n_in; k++)
+		    if (x->in[k]->n[1] != n->id)
+			x->in[l++] = x->in[k];
+		x->n_in = l;
+		continue;
+	    }
+	    n->out[k++] = n->out[j];
+	}
+	n->n_out = k;
+
+	validate_graph(g);
+    }
+    validate_graph(g);
 }
 
 int tag_tail_from(dgraph_t *g, int parent, int id) {
@@ -2029,6 +2084,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
     return 0;
 }
 #else
+#if 0
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     FILE *fp = stdout;
 
@@ -2162,6 +2218,147 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 	return 0;
 }
+#else
+int graph2dot(dgraph_t *g, char *fn, int wrap) {
+    FILE *fp = stdout;
+
+    if (fn) {
+	fp = fopen(fn, "w");
+	if (!fp) {
+	    perror(fn);
+	    return -1;
+	}
+    }
+
+    int i, j;
+    fprintf(fp, "digraph g {\n");
+    //fprintf(fp, "  graph [overlap=scale]\n");
+    //fprintf(fp, "  node [shape=plaintext]\n");
+    //fprintf(fp, "  node [shape=point]\n");
+    //printf("  node [style=invis]\n");
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned)
+	    continue;
+
+//	if (wrap) {
+//	    fprintf(fp, "  n_%d [label=\"%d@%d/", n->id, n->id, n->pos);
+//	    int j;
+//	    int inc = sqrt(n->len)*2 < 20 ? 20 : sqrt(n->len)*2;
+//	    for (j = 0; j < n->len; j += inc) {
+//		fprintf(fp, "%.*s\\n", n->len - j < inc ? n->len-j : inc, n->seq + j);
+//	    }
+//	    fprintf(fp, "\"]\n");
+//	} else {
+//	    fprintf(fp, "  n_%d [label=\"%d@%d/%c\"]\n",
+//		    n->id, n->id, n->pos, n->seq[n->len-1]);
+//	}
+
+//	char bases[5];
+//	for (j = 0; j < 5; j++) bases[j] = n->bases[j] + '0';
+//	fprintf(fp, "  n_%d [label=\"%d/%d/%.5s\", color=\"%s\", penwidth=3, group=%d];\n",
+//		n->id, n->id, n->pos, bases,
+//		n->is_head ? "green3" : n->is_tail ? "skyblue" : "black",
+//		n->id);
+
+
+	//fprintf(fp, "  n_%d [label=\"%d @ %d.%d x %d, ^%d", n->id, n->id, n->pos, n->ins, n->count, n->above);
+	fprintf(fp, "  n_%d [label=\"", n->id);
+	{
+	    int x;
+	    for (x=0; x<n->n_hi; x++)
+		fprintf(fp, "%s%.*s", x?",\\n":"",n->hi[x]->key_len, n->hi[x]->key);
+	}
+	//if (n->ins) fprintf(fp, ".%d", n->ins);
+	//fprintf(fp, "  n_%d [label=\"%d", n->id, n->id);
+	//for (j = n->n_in ? g->kmer-1 : 0; j < g->kmer; j++) {
+	if (n->posa) {
+	    for (j = 0; j < g->kmer; j++) {
+		int k;
+		int m = 0, b = 0;
+		for (k = 0; k < 5; k++)
+		    if (m <= n->bases[j][k])
+			m = n->bases[j][k], b=k;
+		//if (g->kmer <= 12 || j%2==0)
+		fprintf(fp, "\\n%c ", "ACGT*"[b]);
+		//else
+		//	fprintf(fp, "   %c ", "ACGT*"[b]);
+		for (k = 0; k < 5; k++)
+		    fputc(n->bases[j][k] + '0', fp);
+		fprintf(fp, " @ %d", n->posa ? n->posa[j] : 1000 + n->pos + j - (g->kmer-1));
+	    }
+	}
+
+//	for (j = 0; j < n->n_hi; j++)
+//	    fprintf(fp, "\\n%.*s", n->hi[j]->key_len, n->hi[j]->key);
+	fprintf(fp, "\", color=\"%s\", penwidth=3];\n",
+		n->is_head ? "green3" : n->is_tail ? "skyblue" : "black");
+	//fprintf(fp, "  n_%d [label=\"%d/%c\"];\n", n->id, n->id, n->seq[n->len-1]);
+	//fprintf(fp, "  n_%d [label=\"%d/%d\"];\n", n->id, n->id, n->len);
+	for (j = 0; j < n->n_out; j++) {
+//	    if (n->out[j]->count == 0)
+//		continue;
+	    int is_ref = (n->ref && g->node[n->out[j]->n[1]]->ref);
+	    fprintf(fp, "  n_%d -> n_%d [penwidth=%f,label=\"%d\",edges=%d,color=\"%s\"]\n",
+		    n->id, n->out[j]->n[1],
+		    //n->out[j]->count*1.0,
+		    //(sqrt(n->out[j]->count)-1)*2+1,
+		    log(n->out[j]->count+1)+2,
+		    n->out[j]->count,
+		    n->n_out,
+		    is_ref ? n->out[j]->count == 1 ? "gold" : "red1" : "black");
+//	    fprintf(fp, "  n_%d -> n_%d [penwidth=%f,label=\"%c\",edges=%d]\n",
+//		    n->id, n->out[j]->n[1],
+//		    0.2,//(sqrt(n->out[j]->count)-1)*2+1,
+//		    n->seq[n->len-1],
+//		    n->n_out);
+	}
+
+#if 0
+	// incoming edges
+	for (j = 0; j < n->n_in; j++) {
+	    fprintf(fp, "  n_%d -> n_%d [color=\"blue\"]\n", n->id, n->in[j]->n[1]);
+	}
+#endif
+    }
+
+#ifndef MIN
+#  define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
+
+#define MAX_GRAPH_KEY 10
+
+#if 0
+	// Hash key -> node map
+	HashIter *iter = HashTableIterCreate();
+	HashItem *hi;
+	while (hi = HashTableIterNext(g->node_hash, iter)) {
+	    node_t *n = hi->data.p;
+	    fprintf(fp, " n_%.*s [label=\"%.*s\", color=\"grey\", group=%d]\n",
+	    	    hi->key_len, hi->key,
+		    MIN(MAX_GRAPH_KEY, hi->key_len), hi->key, n->id);
+		    //1, hi->key + hi->key_len-1, n->id);
+	    fprintf(fp, " n_%.*s -> n_%d [color=\"grey\"]\n",
+	    	    hi->key_len, hi->key, n->id);
+	    //fprintf(fp, " n_%.5s [label=\"%.*s\", color=\"grey\", group=%d]\n",
+	    //	    hi->key_len-5 + hi->key, hi->key_len, hi->key, n->id);
+	    //fprintf(fp, " n_%.5s -> n_%d [color=\"grey\"]\n",
+	    //	    hi->key_len-5 + hi->key, n->id);
+	}
+
+	HashTableIterDestroy(iter);
+#endif
+
+	fprintf(fp, "}\n");
+
+
+	validate_graph(g);
+	if (fn)
+	    return fclose(fp);
+
+	return 0;
+}
+#endif
 #endif
 
 typedef struct hseq {
@@ -2172,75 +2369,75 @@ typedef struct hseq {
     int score;
 } hseqs;
 
-// Given a haplotype sequence, a reference sequence and the alignment between
-// them, assign a ref coordinate to each kmer from that haplotype indicating
-// the location (of the terminating base) in the reference.
-//
-// Where the haplotype has insertions, we use pos -1 to indicate ins.
-// Where the haplotype has a deletion, we just skip that pos.
-//
-// The plan is we can then go through the debruijn construction process again
-// with the reads, but instead of constructing the graph we use the updated
-// graph to construct a new CIGAR string for each read.
-//
-// TODO: This is just all hap vs ref one at a time.  This may not give
-// sensible hap to hap alignment though.  For that we need a true multiple
-// sequence alignment (including the reference).
-void pad_ref_hap(dgraph_t *g, hseqs *h, haps_t *ref, int *S) {
-    int i = 0, j = 0;
-    char *B = h->seq2, *A = ref->seq;
-    int N = h->len, M = strlen(ref->seq);
-
-    int *pos = calloc(N + g->kmer, sizeof(int));
-
-    // Pos is hooked to last base in KMER.
-    while (i < M || j < N) {
-	int op = *S++;
-	if (op == 0) {
-	    // match/mismatch
-	    pos[j] = i;
-	    if (j >= g->kmer-1) {
-		node_t *n = find_node(g, B + j-(g->kmer-1), g->kmer, 0);
-		if (n) {
-		    printf("%3d %3d  %c (%d)\n", j, pos[j], B[j], n->id);
-		    //putchar('M');
-		    n->pos = i;
-		    // FIXME: what if n->posa is already set?
-		    // We may want to prioritise the highest count route.
-		    n->posa = &pos[j-(g->kmer-1)];
-		} else {
-		    fprintf(stderr, "%3d  %c: Failed to find tail? node %.*s\n", i, B[j],
-			    g->kmer, B+j-(g->kmer-1));
-		}
-	    } else {
-		printf("%3d %3d  %c (before 1st KMER)\n", j, pos[j], B[j]);
-	    }
-	    i++, j++;
-	} else if (op > 0) {
-	    // ins to read
-	    //j += op;
-	    int ilen = op;
-	    while (op) {
-		pos[j] = op-ilen-1;
-		printf("%3d %3d +%.*s\n", j, pos[j], op, &B[j]);
-		//pos[j] = -1;
-		node_t *n = j >= g->kmer-1 ? find_node(g, B + j-(g->kmer-1), g->kmer, 0) : NULL;
-		if (n) {
-		    n->pos = -1;
-		    n->posa = &pos[j-(g->kmer-1)];
-		}
-		op--;
-		j++;
-		//putchar('I');
-	    }
-	} else if (op < 0) {
-	    // del in read.
-	    printf("%3d %3d -%.*s\n", j, pos[j], -op, &A[i]);
-	    i -= op;
-	}
-    }
-    //printf("\n");
-}
+// // Given a haplotype sequence, a reference sequence and the alignment between
+// // them, assign a ref coordinate to each kmer from that haplotype indicating
+// // the location (of the terminating base) in the reference.
+// //
+// // Where the haplotype has insertions, we use pos -1 to indicate ins.
+// // Where the haplotype has a deletion, we just skip that pos.
+// //
+// // The plan is we can then go through the debruijn construction process again
+// // with the reads, but instead of constructing the graph we use the updated
+// // graph to construct a new CIGAR string for each read.
+// //
+// // TODO: This is just all hap vs ref one at a time.  This may not give
+// // sensible hap to hap alignment though.  For that we need a true multiple
+// // sequence alignment (including the reference).
+// void pad_ref_hap(dgraph_t *g, hseqs *h, haps_t *ref, int *S) {
+//     int i = 0, j = 0;
+//     char *B = h->seq2, *A = ref->seq;
+//     int N = h->len, M = strlen(ref->seq);
+// 
+//     int *pos = calloc(N + g->kmer, sizeof(int));
+// 
+//     // Pos is hooked to last base in KMER.
+//     while (i < M || j < N) {
+// 	int op = *S++;
+// 	if (op == 0) {
+// 	    // match/mismatch
+// 	    pos[j] = i;
+// 	    if (j >= g->kmer-1) {
+// 		node_t *n = find_node(g, B + j-(g->kmer-1), g->kmer, 0);
+// 		if (n) {
+// 		    printf("%3d %3d  %c (%d)\n", j, pos[j], B[j], n->id);
+// 		    //putchar('M');
+// 		    n->pos = i;
+// 		    // FIXME: what if n->posa is already set?
+// 		    // We may want to prioritise the highest count route.
+// 		    n->posa = &pos[j-(g->kmer-1)];
+// 		} else {
+// 		    fprintf(stderr, "%3d  %c: Failed to find tail? node %.*s\n", i, B[j],
+// 			    g->kmer, B+j-(g->kmer-1));
+// 		}
+// 	    } else {
+// 		printf("%3d %3d  %c (before 1st KMER)\n", j, pos[j], B[j]);
+// 	    }
+// 	    i++, j++;
+// 	} else if (op > 0) {
+// 	    // ins to read
+// 	    //j += op;
+// 	    int ilen = op;
+// 	    while (op) {
+// 		pos[j] = op-ilen-1;
+// 		printf("%3d %3d +%.*s\n", j, pos[j], op, &B[j]);
+// 		//pos[j] = -1;
+// 		node_t *n = j >= g->kmer-1 ? find_node(g, B + j-(g->kmer-1), g->kmer, 0) : NULL;
+// 		if (n) {
+// 		    n->pos = -1;
+// 		    n->posa = &pos[j-(g->kmer-1)];
+// 		}
+// 		op--;
+// 		j++;
+// 		//putchar('I');
+// 	    }
+// 	} else if (op < 0) {
+// 	    // del in read.
+// 	    printf("%3d %3d -%.*s\n", j, pos[j], -op, &A[i]);
+// 	    i -= op;
+// 	}
+//     }
+//     //printf("\n");
+// }
 
 
 #define ADD_CIGAR(op,len)						\
@@ -2655,7 +2852,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     align_ss(ref, cons, len, clen, 0, 0, X128, GOPEN,GEXT, S, 1,1,1,1);
     fprintf(stderr, "Ref=%s\n", ref);
     fprintf(stderr, "Con=%s\n", cons);
-    display_ss(ref, cons, len, clen, S, 0, 0);
+    //display_ss(ref, cons, len, clen, S, 0, 0);
     //fflush(stderr);
     //fflush(stdout);
 
@@ -3396,8 +3593,9 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     int cons_len = strlen(cons);
     int ref_len = strlen(ref);
     int *S = malloc((cons_len + ref_len) * sizeof(*S));
+#if 1
     align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 4,1, S, 1,1,1,1);
-    //display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
+    display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
 
     int x1 = 0, x2 = 0, *S2 = S;
     while (x1 < cons_len || x2 < ref_len) {
@@ -3425,6 +3623,37 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
 	    }
 	}
     }
+#else
+    align_ss(ref, cons, ref_len, cons_len, 0, 0, X128, 4,1, S, 1,1,1,1);
+    display_ss(ref, cons, ref_len, cons_len, S, 0, 0);
+
+    int x1 = 0, x2 = 0, *S2 = S;
+    while (x1 < cons_len || x2 < ref_len) {
+	int op = *S2++;
+	if (op == 0) {
+	    // Match
+	    //fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
+	    g->node[cid[x1]]->pos=x2;
+	    g->node[cid[x1]]->ins=0;
+	    x1++, x2++;
+	} else if (op < 0) {
+	    // Deletion in consensus
+	    while (op++) {
+		//fprintf(stderr, "- %c () %d\n", ref[x2], x2);
+		x2++;
+	    }
+	} else if (op > 0) {
+	    // Insertion in consensus
+	    int ival = 0;
+	    while (op--) {
+		g->node[cid[x1]]->pos=x2;
+		g->node[cid[x1]]->ins=++ival;
+		//fprintf(stderr, "%c - @ %d %d.%d\n", cons[x1], cid[x1], x2, ival);
+		x1++;
+	    }
+	}
+    }
+#endif
 
     free(S);
 
@@ -3750,12 +3979,31 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     }
     fprintf(stderr, "Using kmer %d\n", kmer);
 
-    //graph2dot(g, "f.dot", 0);
+    graph2dot(g, "f.dot", 0);
+
+    // Prune paths having < 2 counts
+    //prune_edges(g, 2);
 
     // Merge bubbles excluding reference
-    find_bubbles(g, 0);
-    assert(loop_check(g, 0) == 0);
-    //graph2dot(g, "_F.dot", 0);
+    find_bubbles(g, 0, 10);
+    if (loop_check(g, 0)) {
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+	g = NULL;
+	goto err;
+    }
+    find_bubbles(g, 0, 2);
+    if (loop_check(g, 0)) {
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+	g = NULL;
+	goto err;
+    }
+    loop_check(g, 0);
+    graph2dot(g, "_F.dot", 0);
+
 
     // Also try this after find_insertions() call
 #if 0
@@ -3810,7 +4058,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	shift = ref_start + 1;
     }
 
-    //graph2dot(g, "_g.dot", 0);
+    graph2dot(g, "_g.dot", 0);
 
     if (!(cons = compute_consensus(g)))
 	goto err;
@@ -3838,8 +4086,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	ref = cons;
 
     // Now also merge in reference bubbles
-    find_bubbles(g, 1);
+    find_bubbles(g, 1, 0);
     assert(loop_check(g, 0) == 0);
+
+    graph2dot(g, "_h.dot", 0);
 
     // Finally try merging in the consensus, both primary and secondary,
     // incase this makes further bubbles, which during collapse will merge
@@ -3857,7 +4107,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // we have vs original (unrealigned) data, so we need something more than
     // that anyway to fix this.  Find that first. (Suspect it's left vs right
     // alignment justification causing that and SNP vs Indel preferences.)
-#if 0
+#if 1
+    // c2 only as c1 should be represented better by main assembly
     if (cons1) add_seq(g, cons1, cons_len, 0);
     if (cons2) add_seq(g, cons2, cons_len, 0);
     if (loop_check(g, 0)) {
@@ -3865,7 +4116,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	cons1 = cons2 = NULL;
 	goto bigger_kmer;
     }
-    find_bubbles(g, 1);
+    find_bubbles(g, 1, 0);
 #endif
 
     // Map the graph to the reference.  We previously did this by

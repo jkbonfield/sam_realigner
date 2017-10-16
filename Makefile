@@ -6,7 +6,7 @@ INCLUDES=-I$(HOME)/work/samtools_master/htslib
 DEFINES=
 LDFLAGS=
 #LIBS=-lm -L$(HOME)/work/samtools_master/htslib -lhts -lz -lbz2 -llzma -pthread
-LIBS=-lm $(HOME)/work/samtools_master/htslib/libhts.a -lz -lbz2 -llzma -pthread
+LIBS=-lm $(HOME)/work/samtools_master/htslib/libhts.a -lz -lbz2 -llzma -pthread -lcurl -lcrypto
 
 all: $(ALL)
 
