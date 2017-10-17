@@ -4108,7 +4108,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // that anyway to fix this.  Find that first. (Suspect it's left vs right
     // alignment justification causing that and SNP vs Indel preferences.)
 #if 1
-    // c2 only as c1 should be represented better by main assembly
+    // c2 only as c1 should be represented better by main assembly?
+    // FIXME: make optional
     if (cons1) add_seq(g, cons1, cons_len, 0);
     if (cons2) add_seq(g, cons2, cons_len, 0);
     if (loop_check(g, 0)) {
