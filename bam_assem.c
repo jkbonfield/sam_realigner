@@ -1378,7 +1378,7 @@ void rewind_paths(dgraph_t *g, path_t **phead, int n_id, node_t *n_end) {
 // As we progress one node at a time per path, we check 'visited'.
 // If this is set, then we know we have a bubble and can tell
 // which paths are involved.
-int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth) {
+int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis, int *nvis) {
     int p_id = 1;
     int i, v;
     path_t *head = path_create(p_id++);
@@ -1390,6 +1390,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth) {
     path_add(head, g->node[id]);
 //    printf("A: Node %d visisted by %d\n", id, head->id);
     g->node[id]->visited = head->id;
+    vis[(*nvis)++]=id;
 
     // Iterate
     while (head && active) {
@@ -1532,6 +1533,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth) {
 	    }
 	    
 	    n->visited = p->id;
+	    vis[(*nvis)++]=n->id;
 //	    printf("B: Node %d visisted by %d\n", n->id, p->id);
 	}
     }
@@ -1551,23 +1553,26 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth) {
 
 void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
     int i, found;
+    int *v = malloc(g->nnodes * sizeof(int)), nv = 0;
+
+    for (i = 0; i < g->nnodes; i++)
+	g->node[i]->visited = 0;
 
     do {
 	found = 0;
 
-	for (i = 0; i < g->nnodes; i++)
-	    g->node[i]->visited = 0;
-
 	for (i = 0; i < g->nnodes; i++) {
 	    int j;
-	    // Needed?
-	    for (j = 0; j < g->nnodes; j++)
-		g->node[j]->visited = 0;
 
 	    if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
 		//printf("Graph start at %d\n", i);
 
-		int b = find_bubble_from2(g, i, use_ref, min_depth);
+		nv = 0;
+		int b = find_bubble_from2(g, i, use_ref, min_depth, v, &nv);
+
+		// Only clear the nodes that we visited.
+		for (j = 0; j < nv; j++)
+		    g->node[v[j]]->visited = 0;
 
 		if (b) {
 		    found += b;
@@ -1577,6 +1582,8 @@ void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
 	    }
 	}
     } while (found);
+
+    free(v);
 }
 
 void prune_edges(dgraph_t *g, int min_count) {
