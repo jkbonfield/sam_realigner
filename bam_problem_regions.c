@@ -327,6 +327,9 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     }
     fprintf(stderr, "    Realign %d reads\n", count);
 
+    if (count == 0)
+	return 0;
+
     // Realign the selection
     int *new_pos = malloc(count * sizeof(*new_pos));
     if (!new_pos) {
