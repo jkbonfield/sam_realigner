@@ -4114,18 +4114,19 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // we have vs original (unrealigned) data, so we need something more than
     // that anyway to fix this.  Find that first. (Suspect it's left vs right
     // alignment justification causing that and SNP vs Indel preferences.)
-#if 1
+
     // c2 only as c1 should be represented better by main assembly?
     // FIXME: make optional
-    if (cons1) add_seq(g, cons1, cons_len, 0);
-    if (cons2) add_seq(g, cons2, cons_len, 0);
-    if (loop_check(g, 0)) {
-	// adding consensus caused loop; give up on that idea.
-	cons1 = cons2 = NULL;
-	goto bigger_kmer;
+    if (cons1 || cons2) {
+	if (cons1) add_seq(g, cons1, cons_len, 0);
+	if (cons2) add_seq(g, cons2, cons_len, 0);
+	if (loop_check(g, 0)) {
+	    // adding consensus caused loop; give up on that idea.
+	    cons1 = cons2 = NULL;
+	    goto bigger_kmer;
+	}
+	find_bubbles(g, 1, 0);
     }
-    find_bubbles(g, 1, 0);
-#endif
 
     // Map the graph to the reference.  We previously did this by
     // adding the reference as a sequence and collapsing bubbles
@@ -4206,7 +4207,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     return ret;
 }
 
+//=============================================================================
 #ifdef TEST_MAIN
+//=============================================================================
+//
 // Basic load function to read an entire BAM file.
 // This is just a test for small subsets, rather than streaming
 // a large file.

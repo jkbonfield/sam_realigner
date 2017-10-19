@@ -69,11 +69,11 @@
 // FIXME: ideally we should have MARGIN+STR size, so an indel at pos
 // 1234 in an STR spanning 1234 to 1250 should consider the problem to
 // be 1234-MARGIN to 1250+MARGIN instead of to 1234+MARGIN.
-#define MARGIN 100   // margin around suspect regions
-#define CON_MARGIN 100 // margin to add on to consensus when realigning
-#define MIN_INDEL 2
+#define MARGIN 100       // margin around suspect regions
+#define CON_MARGIN 100   // margin to add on to consensus when realigning
 
-#define MAX_DEPTH 20000
+#define MIN_INDEL 2      // FIXME: parameterise
+#define MAX_DEPTH 20000  // FIXME: parameterise
 
 // Prevalence of low mapping quality, > PERC => store all
 // Lower => larger files
@@ -134,6 +134,7 @@ typedef struct {
     double over_depth;
     double indel_ov_perc;
     int clevel;
+    int cons1, cons2;
 } cram_realigner_params;
 
 //-----------------------------------------------------------------------------
@@ -242,10 +243,10 @@ typedef struct {
     bam_sorted_list *b_hist;
     bam1_t *b_unmap;
     int64_t count_in, count_out;
+    cram_realigner_params *params;
 } pileup_cd;
 
-int flush_bam_list(pileup_cd *cd, cram_realigner_params *p, bam_sorted_list *bl,
-		   int before_tid, int before, samFile *out, bam_hdr_t *header) {
+int flush_bam_list(pileup_cd *cd, bam_sorted_list *bl, int before_tid, int before, samFile *out, bam_hdr_t *header) {
     bam_sorted_item *bi, *next;
 
     // Sanity check
@@ -337,15 +338,12 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     for (i = 0; i < count; i++)
 	new_pos[i] = ba[i]->core.pos;
     extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_len, int ref_pos, char *cons1, char *cons2, int len);
-    // FIXME: compute "ref" as cigar oriented consensus? Maybe cannot
-    // when deletion?
-    char *ref = NULL;//get_ref(ref_pos); // fixme; shouldn't be strdup, but return ptr+len
 
-    // FIXME: Use real ref and not cons!
     char region[1024];
-    // FIXME: look up name in hdr
-    sprintf(region, "%s:%d-%d", hdr->target_name[ba[0]->core.tid], start_ovl+1, end_ovl);
+    snprintf(region, 1023, "%s:%d-%d", hdr->target_name[ba[0]->core.tid], start_ovl+1, end_ovl);
     int seq_len;
+
+    char *ref = NULL;
     if (fai) {
 	ref = fai_fetch(fai, region, &seq_len);
     } else {
@@ -353,8 +351,10 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
 	seq_len = cons_len;
     }
 
-    //if (bam_realign(hdr, ba, count, new_pos, cons, cons_len, start_ovl) < 0) {
-    if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl, cons, cons2, cons_len) < 0) {
+    if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl,
+		    cd->params->cons1 ? cons : NULL,
+		    cd->params->cons2 ? cons2 : NULL,
+		    cons_len) < 0) {
 	free(new_pos);
 	free(ba);
 	return -1;
@@ -496,6 +496,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
     cd.b_hist = b_hist;
     cd.count_in = 0;
     cd.count_out = 0;
+    cd.params = p;
 
     p_iter = bam_plp_init(pileup_callback, &cd);
     bam_plp_set_maxcnt(p_iter, INT_MAX);
@@ -518,7 +519,8 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
     // Primary and secondary consensus computed on-the-fly.  Optionally
     // used in assembly graph generation.
     char *cons = malloc(1024), *cons2 = malloc(1024);
-    assert(CON_MARGIN < 1024);
+    assert(p->cons_margin < 1024);
+    assert(p->margin < 1024);
     memset(cons,  'N', 1024);
     memset(cons2, 'N', 1024);
     int cons_sz = 1024;
@@ -534,7 +536,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 
 	if (tid != last_tid) {
 	    // Ensure b_hist is only per chromosome
-	    if (flush_bam_list(&cd, p, b_hist, tid, INT_MAX, out, header) < 0)
+	    if (flush_bam_list(&cd, b_hist, tid, INT_MAX, out, header) < 0)
 		return -1;
 	    last_tid = tid;
 	    start_reg = INT_MAX, end_reg = INT_MIN;
@@ -551,7 +553,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	}
 
 	if (start_cons == -1)
-	    start_cons = pos-CON_MARGIN;
+	    start_cons = pos - p->cons_margin;
 
 	// For avg depth; see depth renorm later on.
 	total_depth += n_plp;
@@ -727,8 +729,8 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	switch(status) {
 	case S_OK:
 	    if (suspect) {
-		start_reg = pos - MARGIN;
-		end_reg = pos + MARGIN;
+		start_reg = pos - p->margin;
+		end_reg = pos + p->margin;
 		start_ovl = left_most;
 		end_ovl = right_most;
 		check_overlap(b_hist, start_reg, &start_ovl, &end_ovl);
@@ -736,29 +738,30 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		status = S_PROB;
 	    } else {
 		// Periodic flush here of reads ending before  pos-MARGIN
-		flush_pos = left_most - MARGIN;
+		flush_pos = left_most - p->margin;
 	    }
 	    break;
 
 	case S_PROB:
 	    if (suspect) {
-		end_reg = pos + MARGIN;
+		end_reg = pos + p->margin;
 		if (end_ovl < right_most)
 		    end_ovl = right_most;
 		//fprintf(stderr, "PROB extnd %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
 	    } else {
-		if (left_most > end_reg && pos > end_ovl + CON_MARGIN) {
+		if (left_most > end_reg && pos > end_ovl + p->cons_margin) {
 		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", pos, start_reg, end_reg, start_ovl, end_ovl);
 		    realign_list(&cd, header, b_hist,
-				 cons  + start_ovl-CON_MARGIN - start_cons,
-				 cons2 + start_ovl-CON_MARGIN - start_cons,
-				 end_ovl - start_ovl + 2*CON_MARGIN,
-				 start_reg, end_reg, start_ovl-CON_MARGIN, end_ovl+CON_MARGIN,
+				 cons  + start_ovl - p->cons_margin - start_cons,
+				 cons2 + start_ovl - p->cons_margin - start_cons,
+				 end_ovl - start_ovl + 2*p->cons_margin,
+				 start_reg, end_reg,
+				 start_ovl - p->cons_margin, end_ovl + p->cons_margin,
 				 fai);
 		    start_reg = end_reg = left_most;
 		    start_ovl = end_ovl = 0;
 		    status = S_OK;
-		    flush_pos = left_most - MARGIN;
+		    flush_pos = left_most - p->margin;
 		}
 	    }
 
@@ -783,7 +786,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	}
 
 	// Flush history (preserving sort order).
-	if (flush_bam_list(&cd, p, b_hist, INT_MAX, flush_pos, out, header) < 0)
+	if (flush_bam_list(&cd, b_hist, INT_MAX, flush_pos, out, header) < 0)
 	    return -1;
     }
 
@@ -795,7 +798,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	}
     }
 
-    if (flush_bam_list(&cd, p, b_hist, INT_MAX, INT_MAX, out, header) < 0)
+    if (flush_bam_list(&cd, b_hist, INT_MAX, INT_MAX, out, header) < 0)
 	return -1;
 
     // Handle trailing unmapped reads
@@ -859,8 +862,9 @@ void usage(FILE *fp) {
     fprintf(fp, "Realigner version %s\n\n", REALIGNER_VERSION);
     fprintf(fp, "Usage: realigner [options] in-file out-file\n");
     fprintf(fp, "\nOptions:\n"
-            "-I fmt(,opt...)   Input format and format-options [auto].\n"
-            "-O fmt(,opt...)   Output format and format-options [SAM].\n");
+                "-I fmt(,opt...)   Input format and format-options [auto].\n"
+                "-O fmt(,opt...)   Output format and format-options [SAM].\n");
+    fprintf(fp, "-u                Write uncompressed output\n");
     fprintf(fp, "-v                Increase verbosity\n");
     fprintf(fp, "-R filename       Reference FASTA file\n");
     fprintf(fp, "-r region         Sub region of input file in chr:start-end format. [all]\n");
@@ -871,6 +875,7 @@ void usage(FILE *fp) {
     fprintf(fp, "-M float          Suspect if >= [%.2f] reads have low mapping quality\n", LOW_MQUAL_PERC);
     fprintf(fp, "-Z float          Suspect if >= [%.2f] indel sizes do not fit bi-modal dist.\n", INS_LEN_PERC);
     fprintf(fp, "-V float          Suspect if <  [%.2f] reads span indel\n", INDEL_OVERLAP_PERC);
+    fprintf(fp, "-X int            Whether to add primary (val&1) or secondary (val&2) consensus to graph\n");
     fprintf(fp, "\n");
 }
 
@@ -894,9 +899,11 @@ int main(int argc, char **argv) {
         .over_depth    = OVER_DEPTH,        // -P
         .indel_ov_perc = INDEL_OVERLAP_PERC,// -V
 	.clevel        = 6,                 // -u
+	.cons1         = 0,                 // -X
+	.cons2         = 0,                 // -X
     };
 
-    while ((opt = getopt(argc, argv, "I:O:m:c:v:M:Z:P:V:r:R:u")) != -1) {
+    while ((opt = getopt(argc, argv, "I:O:m:c:v:M:Z:P:V:r:R:uX:")) != -1) {
 	switch (opt) {
 	case 'u':
 	    params.clevel = 0;
@@ -948,6 +955,11 @@ int main(int argc, char **argv) {
         case 'V':
             params.indel_ov_perc = atof(optarg);
             break;
+
+	case 'X':
+	    params.cons1 = atoi(optarg) & 1;
+	    params.cons2 = atoi(optarg) & 2;
+	    break;
 
 	default: /* ? */
 	    usage(stderr);
