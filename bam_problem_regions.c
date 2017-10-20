@@ -360,6 +360,8 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
 		    cons_len) < 0) {
 	free(new_pos);
 	free(ba);
+	if (fai)
+	    free(ref);
 	return -1;
     }
     if (fai)
@@ -792,6 +794,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	if (flush_bam_list(&cd, b_hist, INT_MAX, flush_pos, out, header) < 0)
 	    return -1;
     }
+    fai_destroy(fai);
 
     if (plp) {
 	int i;

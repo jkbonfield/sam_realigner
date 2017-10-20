@@ -2908,7 +2908,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 
     DL_FOREACH_SAFE(reps, elt, tmp) {
 	if (elt->end - elt->start + 1 < MIN_STR)
-	    continue;
+	    goto next;
 
 	// If any of STR spans an observed indel, then mark it, otherwise
 	// we're happy to keep alignments against this region.
@@ -2919,7 +2919,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 		break;
 	}
 	if (i == right)
-	    continue;
+	    goto next;
 
 	if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
 	    for (i = elt->start; i < elt->end && i < len; i++)
@@ -2929,6 +2929,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    //fprintf(stderr, "STR: %2d .. %2d %.*s\n", elt->start, elt->end,
 	    //	    elt->end - elt->start+1, &ref[elt->start]);
 	}
+    next:
 	DL_DELETE(reps, elt);
 	free(elt);
     }
@@ -4074,8 +4075,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g, 0)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
-	if ((kmer += 10) < MAX_KMER)
+	if ((kmer += 10) < MAX_KMER) {
+	    free_haps(cons, 1);
+	    free_haps(ref_, 1);
 	    goto bigger_kmer;
+	}
 	g = NULL;
 	goto err;
     }
@@ -4086,6 +4090,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	graph_destroy(g);
 	g = NULL;
 	kmer += KMER_INC_FINAL;
+	free_haps(cons, 1);
+	free_haps(ref_, 1);
 	goto bigger_kmer;
     }
 
@@ -4123,6 +4129,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	if (loop_check(g, 0)) {
 	    // adding consensus caused loop; give up on that idea.
 	    cons1 = cons2 = NULL;
+	    free_haps(cons, 1);
+	    free_haps(ref_, 1);
 	    goto bigger_kmer;
 	}
 	find_bubbles(g, 1, 0);

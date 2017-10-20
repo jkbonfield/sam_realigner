@@ -190,7 +190,7 @@ rep_ele *find_STR(char *cons, int len, int lower_only) {
 
 /* -----------------------------------------------------------------------------
  * Computes repeat regions in the consensus and then provides a bit mask
- * indicating the extend of the STRs.
+ * indicating the extent of the STRs.
  *
  * The purpose of this is to identify where a read needs to span the entire
  * region in order to validate how many copies of a repeat word are present.
