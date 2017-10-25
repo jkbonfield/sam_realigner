@@ -68,31 +68,35 @@ appropriate location within the string.
 
 //---------------------------------------------------------------------------
 
-int W128[128][128];
-extern char base_val[128];
-void init_W128_score(int mis, int mat) {
-  int i, j;
+char base_val[128];
 
-  for (i = 0; i < 128; i++)
-    for (j = 0; j < 128; j++)
-      W128[i][j] = mis;
-  for (i = 0; i < 16; i++)
-    W128["ACGTacgtacgtACGT"[i]]["ACGTacgtACGTacgt"[i]] = mat;
+void init_base_val(void) {
+    int i;
+    for (i=0; i<128; i++)
+        base_val[i] = 5;
 
-  for (i = 0; i < 128; i++)
-    W128['n'][i] = W128['n'][i] = W128[i]['N'] = W128[i]['n'] = 0;
-
-  extern init_base_val(void);
-  init_base_val();
+    base_val['A'] = 0;
+    base_val['a'] = 0;
+    base_val['C'] = 1;
+    base_val['c'] = 1;
+    base_val['G'] = 2;
+    base_val['g'] = 2;
+    base_val['T'] = 3;
+    base_val['t'] = 3;
+    base_val['U'] = 3;
+    base_val['u'] = 3;
+    base_val['*'] = 4;
 }
 
 // Ambiguity codes include base-pad combinations.
 // We set the scores so that given the choice of aligning
 // A vs AC ambig or A* ambig, the AC scores higher.  Thus by
 // elimination pads preferentially align to A* than AC.
-int X128[128][128];
+int8_t X128[128][128];
 void init_X128_score(int mis, int mat) {
-    memset(X128, 0, 128*128*sizeof(int)); // why 0 and not mis?
+    init_base_val();
+
+    memset(X128, 0, 128*128*sizeof(X128[0][0])); // why 0 and not mis?
     int i, j;
 
     // Matches
@@ -173,6 +177,60 @@ char *vec2seq(int (*v)[5], int len) {
     return s;
 }
 
+//---------------------------------------------------------------------------
+// Interface to Heng Li's ksw code
+
+// FIXME: we should be changing the calling code to parse cigar instead of the
+// old 'S' alignment edit string as it's more efficient.
+int align_ss(char *A, char *B, int len_A, int len_B, int low, int high,
+	     int8_t W[][128], int G, int H, int *S, int s1, int s2, int e1, int e2) {
+    uint32_t *cigar = NULL;
+    int ncigar = 0, score, i, j, k;
+
+    score = ksw_global_end(len_A, A, len_B, B, 128, (uint8_t *)W, G, H, 0,
+			   &ncigar, &cigar, !s1, !e1, !s2, !e2);
+
+    i = j = k = 0;
+    S--;
+
+    while (i < len_A || j < len_B) {
+	if (k >= ncigar)
+	    break; // truncated through band?
+	int op = cigar[k] & BAM_CIGAR_MASK;
+	int oplen = cigar[k++] >> BAM_CIGAR_SHIFT;
+
+	switch (op) {
+	case BAM_CMATCH:
+	    while(oplen--) {
+		*++S = 0;
+		i++, j++;
+	    }
+	    break;
+
+	case BAM_CDEL: // in B only
+	    if (oplen) {
+		*++S = oplen;
+		j += oplen;
+	    }
+	    break;
+
+	case BAM_CINS: // in A only
+	    if (oplen) {
+		i += oplen;
+		*++S = -oplen;
+	    }
+	    break;
+
+	default:
+	    abort();
+	}
+    }
+
+    free(cigar);
+    return score;
+}
+
+
 int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
 	     int G, int H, int *S, int s1, int s2, int e1, int e2) {
     char *seq1 = vec2seq(v1, len1); //puts(seq1);
@@ -180,8 +238,8 @@ int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
     
     int score = align_ss(seq1, seq2, len1, len2, 0,0, X128, G,H, S, s1,s2,e1,e2);
 
-    fprintf(stderr, "Score=%d\n", score);
-    display_ss(seq1, seq2, len1, len2, S, 0, 0);
+    fprintf(stderr, "Score=%d, end-gaps=%d,%d,%d,%d\n", score, s1,s2,e1,e2);
+    //display_ss(seq1, seq2, len1, len2, S, 0, 0);
 
     free(seq1);
     free(seq2);
@@ -3603,7 +3661,7 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     int *S = malloc((cons_len + ref_len) * sizeof(*S));
 #if 1
     align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 4,1, S, 1,1,1,1);
-    display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
+    //display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
 
     int x1 = 0, x2 = 0, *S2 = S;
     while (x1 < cons_len || x2 < ref_len) {
@@ -3633,7 +3691,7 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     }
 #else
     align_ss(ref, cons, ref_len, cons_len, 0, 0, X128, 4,1, S, 1,1,1,1);
-    display_ss(ref, cons, ref_len, cons_len, S, 0, 0);
+    //display_ss(ref, cons, ref_len, cons_len, S, 0, 0);
 
     int x1 = 0, x2 = 0, *S2 = S;
     while (x1 < cons_len || x2 < ref_len) {
@@ -3924,7 +3982,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     }
 #endif
     
-    init_W128_score(-4,1);
     init_X128_score(-4,4);
 
     // Convert BAMS to seqs instead, so we can perform edits on them
@@ -4207,7 +4264,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     graph_destroy(g);
     free_haps(haps, nhaps);
     free_haps(cons, 1);
-    fprintf(stderr, "Free %p\n", ref_);
     free_haps(ref_, 1);
 
     fprintf(stderr, "Finished.\n");
