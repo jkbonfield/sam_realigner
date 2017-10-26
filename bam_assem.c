@@ -180,8 +180,9 @@ char *vec2seq(int (*v)[5], int len) {
 //---------------------------------------------------------------------------
 // Interface to Heng Li's ksw code
 
-// FIXME: we should be changing the calling code to parse cigar instead of the
-// old 'S' alignment edit string as it's more efficient.
+#if 0
+// Left here for the commented out merge_tips code, which still uses the old
+// interface.
 int align_ss(char *A, char *B, int len_A, int len_B, int low, int high,
 	     int8_t W[][128], int G, int H, int *S, int s1, int s2, int e1, int e2) {
     uint32_t *cigar = NULL;
@@ -229,23 +230,8 @@ int align_ss(char *A, char *B, int len_A, int len_B, int low, int high,
     free(cigar);
     return score;
 }
+#endif
 
-
-int align_vv(int (*v1)[5], int (*v2)[5], int len1, int len2,
-	     int G, int H, int *S, int s1, int s2, int e1, int e2) {
-    char *seq1 = vec2seq(v1, len1); //puts(seq1);
-    char *seq2 = vec2seq(v2, len2); //puts(seq2);
-    
-    int score = align_ss(seq1, seq2, len1, len2, 0,0, X128, G,H, S, s1,s2,e1,e2);
-
-    fprintf(stderr, "Score=%d, end-gaps=%d,%d,%d,%d\n", score, s1,s2,e1,e2);
-    //display_ss(seq1, seq2, len1, len2, S, 0, 0);
-
-    free(seq1);
-    free(seq2);
-
-    return score;
-}
 
 typedef struct haps {
     int   pos;
@@ -936,7 +922,201 @@ void prune_heads(dgraph_t *g, int min_count) {
 	}
     } while (done_something);
 }
+ 
+static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node_t *n_end,
+				       int start, int (*vn)[5], node_t **path1, int np1, node_t **path2, int np2,
+				       int *p, int *x1, int *x2, node_t **l1, node_t **l2) {
+    int i, j;
+    // March along both paths, so merge n2 into n1.
+    //printf("M %2d %2d\n", n1->id, n2->id);
 
+    // Merge coordinates
+    if (n1->pos == INT_MIN) {
+	n1->pos = n2->pos;
+	n1->posa = n2->posa;
+    }
+
+    // Base frequencies
+    //memcpy(n1->bases, vn[(*p)++], g->kmer*5*sizeof(int));
+    for (j = 0; j < g->kmer; j++)
+	memcpy(n1->bases[j], vn[*p+(g->kmer-j)-1], 5*sizeof(int));
+    (*p)++;
+    //for (j = 0; j < g->kmer; j++) {
+    //    for (i = 0; i < 5; i++)
+    //	n1->bases[j][i] += n2->bases[j][i];
+    //}
+
+    // Fix node hash keys
+    //fprintf(stderr, "%s (%d) vs %s (%d)\n", n1->hi[0]->key, n1->count, n2->hi[0]->key, n2->count);
+    n1->hi = realloc(n1->hi, (n1->n_hi + n2->n_hi)*sizeof(*n1->hi));
+    if (n1->count >= n2->count) {
+	for (i = 0; i < n2->n_hi; i++) {
+	    HashItem *hi = n2->hi[i];
+	    hi->data.p = n1;
+	    n1->hi[n1->n_hi++] = hi;
+	}
+    } else {
+	memmove(&n1->hi[n2->n_hi], &n1->hi[0], n1->n_hi*sizeof(*n1->hi));
+	for (i = 0; i < n2->n_hi; i++) {
+	    HashItem *hi = n2->hi[i];
+	    hi->data.p = n1;
+	    n1->hi[i] = hi;
+	}
+	n1->n_hi += n2->n_hi;
+    }
+
+    n1->count += n2->count;
+
+    // Merge incoming.
+    for (i = 0; i < n2->n_in; i++) {
+	for (j = 0; j < n1->n_in; j++)
+	    if (n1->in[j]->n[1] == n2->in[i]->n[1] ||
+		(*x2+1 < np2 && n2->in[i]->n[1] == path2[*x2+1]->id))
+		break;
+	if (j == n1->n_in && n2->in[i]->n[1] != start) { // not already a parent
+	    if (n1->n_in >= MAX_EDGE)
+		continue;
+	    n1->in[n1->n_in++] = n2->in[i];
+	    node_t *n3 = g->node[n2->in[i]->n[1]];
+	    move_edge_out(g, n3, n2, n1);
+	    //for (j = 0; j < n3->n_out; j++)
+	    //    if (n3->out[j]->n[1] == n2->id)
+	    //	n3->out[j]->n[1] = n1->id;
+	} else if (j != n1->n_in && n2->in[i]->n[1] != start &&
+		   ((*x2+1 >= np2) ||
+		    (*x2+1 < np2 && path2[*x2+1]->id != n2->in[i]->n[1]))) {
+	    // shared node, parent(n1) is also parent(n2) and
+	    // not on path, so ensure we delete the edge linking
+	    //to n2 // although we don't need to add it to n1 as
+	    // it's already there.
+	    node_t *n3 = g->node[n2->in[i]->n[1]];
+	    // remove edge out
+	    int k, l;
+	    for (k = l = 0; k < n3->n_out; k++) {
+		if (n3->out[k]->n[1] == n2->id)
+		    continue;
+		n3->out[l++] = n3->out[k];
+	    }
+	    n3->n_out = l;
+	}
+    }
+
+    // Merge outgoing
+    for (i = 0; i < n2->n_out; i++) {
+	// Migrate n2->out unless n2->out on // n1 path
+	for (j = 0; j < n1->n_out; j++)
+	    if (n1->out[j]->n[1] == n2->out[i]->n[1] ||
+		(*x2 > 0 && path2[*x2-1] && n2->out[i]->n[1] == path2[*x2-1]->id))
+		break;
+	if (j == n1->n_out) { // not already a child
+	    if (n2->out[i]->n[1] != n_end->id)
+		move_edge_in(g, n2->out[i], n1, n2);
+	} else {
+	    n1->out[j]->count += n2->out[i]->count;
+	}
+    }
+    // Cull n1->out that are on n2 path
+    int k;
+    for (j = k = 0; j < n1->n_out; j++) {
+	for (i = 0; i < n2->n_out; i++)
+	    if (*x2 > 0 && path2[*x2-1] && n1->out[j]->n[1] == path2[*x2-1]->id)
+		break;
+	if (i == n2->n_out)
+	    n1->out[k++] = n1->out[j];
+    }
+    n1->n_out = k;
+
+    // Merge positions
+    //printf("Merge pos %d with %d\n", n1->pos, n2->pos);
+
+    n2->pruned = 1;
+    for (j = 0; j < n2->n_out; j++) {
+	node_t *t = g->node[n2->out[j]->n[1]];
+	int l;
+	for (l = k = 0; k < t->n_in; k++) {
+	    if (t->in[k]->n[1] != n2->id)
+		t->in[l++] = t->in[k];
+	}
+	t->n_in = l;
+    }
+    (*x1)++, (*x2)++;
+    *l1 = n1;
+    *l2 = n2;
+}
+
+static void node_common_ancestor_ins(dgraph_t *g, node_t *n1, node_t *n2, node_t *n_end, node_t *l1, node_t *l2,
+				    int start, int (*vn)[5], node_t **path1, int np1, node_t **path2, int np2,
+				    int op, int *p, int *x1, int *x2,
+				    node_t **l1_p, node_t **l2_p, node_t **n2_p) {
+    int i,j;
+
+    // Insertion in path2, link into path1
+    if (!n1)
+	n1 = g->node[start]; // if inserting to end of alignment
+    int first_ins = 1;
+    while (op-- && *x2 < np2) {
+	//printf("I  - %2d\n", n2->id);
+
+	if (first_ins) {
+	    // Replace l1 in from n1 with in from n2.
+	    for (j = 0; j < l1->n_in; j++) {
+		if (l1->in[j]->n[1] == n1->id) {
+		    // FIXME: plus edge hash
+		    l1->in[j]->n[1] = n2->id;
+		    // FIXME: do we need to ensure this is in[0]?
+		}
+	    }
+
+	    // Link n2 out to l1
+	    for (j = 0; j < n2->n_out; j++)
+		if (n2->out[j]->n[1] == l1->id)
+		    break;
+	    if (j == n2->n_out)
+		// Move out n2->l2 to n2->l1
+		move_edge_out(g, n2, l2, l1);
+
+	    memcpy(n2->bases, vn[(*p)++], 5*sizeof(int));
+	    first_ins = 0;
+	}
+
+	if (op == 0 || *x2 == np2-1) { // last
+	    // Link n2 in to n1
+	    // Link n1 out to n2
+	    // Cull parent(n2) out (to n2)
+	    node_t *p2 = g->node[n2->in[0]->n[1]];
+	    n2->in[0]->n[1] = n1->id;
+	    for (i = 0; i < n1->n_out; i++)
+		if (n1->out[i]->n[1] == n2->id)
+		    break;
+	    if (i == n1->n_out)
+		// Move n1->l1 to n1->n2
+		move_edge_out(g, n1, l1, n2);
+
+	    if (p2) {
+		for (i = 0; i < p2->n_out; i++) {
+		    if (p2->out[i]->n[1] == n2->id) {
+			memmove(&p2->out[i], &p2->out[i+1],
+				(p2->n_out - (i+1)) * sizeof(p2->out[0]));
+			p2->n_out--;
+			i--;
+		    }
+		}
+	    }
+
+	    (*p)++;
+	}
+
+	//n2->bases[g->kmer-1][4]++;
+
+	path2[*x2] = NULL;
+	l2 = n2;
+	n2 = path2[++(*x2)];
+    }
+
+    *l2_p = l2;
+    *l1_p = l2;
+    *n2_p = n1;
+}
 
 // Node n_end has parents p1 and p2 which meet up again at some common
 // node n_start.  Find n_start.
@@ -1037,8 +1217,13 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     for (i = g->kmer-2; l && i >= 0; i--)
 	memcpy(v2[len2++], l->bases[i], 5*sizeof(int));
 
-    int *S = malloc((len1+len2)*sizeof(int));
-    align_vv(v1, v2, len1, len2, GOPEN,GEXT, S, 0,0,0,0);
+    uint32_t *cigar = NULL, ncigar = 0;
+    char *vs1 = vec2seq(v1, len1);
+    char *vs2 = vec2seq(v2, len2);
+    ksw_global_end(len1, vs1, len2, vs2, 128, (uint8_t *)X128, GOPEN, GEXT, 0,
+		   &ncigar, &cigar,  1,1,1,1);
+    free(vs1);
+    free(vs2);
 
     // Remove path2 from start/end nodes.
     n = g->node[start];
@@ -1063,35 +1248,48 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 
     // Merge v1/v2 into vn.  FIXME v1/v2 into v2 is simpler
     {
-	int first = 1, *S2 = S;
-	int x1 = 0, x2 = 0, p = 0;
+	int first = 1, x1 = 0, x2 = 0, p = 0;
 
+	int cig_ind = 0;
 	while (x1 < len1 && x2 < len2) {
-	    int op = *S2++;
-	    if (op == 0) {
-		// match
-		memcpy(vn[p], v1[x1], sizeof(v1[x1]));
-		vn[p][0] += v2[x2][0];
-		vn[p][1] += v2[x2][1];
-		vn[p][2] += v2[x2][2];
-		vn[p][3] += v2[x2][3];
-		vn[p][4] += v2[x2][4];
-		x1++; x2++;
-		p++;
-	    } else if (op < 0) {
+	    if (cig_ind >= ncigar)
+		abort();
+
+	    int op = cigar[cig_ind] & BAM_CIGAR_MASK;
+	    int oplen = cigar[cig_ind++] >> BAM_CIGAR_SHIFT;
+
+	    switch (op) {
+	    case BAM_CMATCH:
+		while (oplen-- && x1 < len1 && x2 < len2) {
+		    // match
+		    memcpy(vn[p], v1[x1], sizeof(v1[x1]));
+		    vn[p][0] += v2[x2][0];
+		    vn[p][1] += v2[x2][1];
+		    vn[p][2] += v2[x2][2];
+		    vn[p][3] += v2[x2][3];
+		    vn[p][4] += v2[x2][4];
+		    x1++; x2++;
+		    p++;
+		}
+		break;
+
+	    case BAM_CINS:
 		// Already in path1 only, nothing to do with path2;
-		while (op++ && x1 < np1) {
+		while (oplen-- && x1 < len1) {
 		    memcpy(vn[p], v1[x1++], sizeof(v1[p]));
 		    vn[p][4]++;
 		    p++;
 		}
-	    } else {
+		break;
+
+	    case BAM_CDEL:
 		// Insertion in path2, link into path1
-		while (op--) {
+		while (oplen--) {
 		    memcpy(vn[p], v1[x2++], sizeof(v1[p]));
 		    vn[p][4]++;
 		    p++;
 		}
+		break;
 	    }
 	}
 
@@ -1120,8 +1318,8 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     // => path 1:  5 4 3
     // => path 2:  14 13 12
 
-    if (1) {
-	int first = 1, *S2 = S;
+    {
+	int first = 1, cig_ind = 0, oplen = 0, op;
 	int x1 = 0, x2 = 0, p = 0;
 
 	node_t *l1 = n_end;
@@ -1129,205 +1327,40 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	while (x1 < np1 && x2 < np2) {
 	    node_t *n1 = path1[x1];
 	    node_t *n2 = path2[x2];
-	    int op = *S2++;
-	    if (op == 0) {
-		// March along both paths, so merge n2 into n1.
-		//printf("M %2d %2d\n", n1->id, n2->id);
 
-		// Merge coordinates
-		if (n1->pos == INT_MIN) {
-		    n1->pos = n2->pos;
-		    n1->posa = n2->posa;
-		}
+	    if (oplen == 0) {
+		if (cig_ind >= ncigar)
+		    abort();
+		op = cigar[cig_ind] & BAM_CIGAR_MASK;
+		oplen = cigar[cig_ind++] >> BAM_CIGAR_SHIFT;
+	    }
 
-		// Base frequencies
-		//memcpy(n1->bases, vn[p++], g->kmer*5*sizeof(int));
-		for (j = 0; j < g->kmer; j++)
-		    memcpy(n1->bases[j], vn[p+(g->kmer-j)-1], 5*sizeof(int));
-		p++;
-		//for (j = 0; j < g->kmer; j++) {
-		//    for (i = 0; i < 5; i++)
-		//	n1->bases[j][i] += n2->bases[j][i];
-		//}
-
-		// Fix node hash keys
-		//fprintf(stderr, "%s (%d) vs %s (%d)\n", n1->hi[0]->key, n1->count, n2->hi[0]->key, n2->count);
-		n1->hi = realloc(n1->hi, (n1->n_hi + n2->n_hi)*sizeof(*n1->hi));
-		if (n1->count >= n2->count) {
-		    for (i = 0; i < n2->n_hi; i++) {
-			HashItem *hi = n2->hi[i];
-			hi->data.p = n1;
-			n1->hi[n1->n_hi++] = hi;
-		    }
-		} else {
-		    memmove(&n1->hi[n2->n_hi], &n1->hi[0], n1->n_hi*sizeof(*n1->hi));
-		    for (i = 0; i < n2->n_hi; i++) {
-			HashItem *hi = n2->hi[i];
-			hi->data.p = n1;
-			n1->hi[i] = hi;
-		    }
-		    n1->n_hi += n2->n_hi;
-		}
-
-		n1->count += n2->count;
-
-		// Merge incoming.
-		for (i = 0; i < n2->n_in; i++) {
-		    for (j = 0; j < n1->n_in; j++)
-			if (n1->in[j]->n[1] == n2->in[i]->n[1] ||
-			    (x2+1 < np2 && n2->in[i]->n[1] == path2[x2+1]->id))
-			    break;
-		    if (j == n1->n_in && n2->in[i]->n[1] != start) { // not already a parent
-			if (n1->n_in >= MAX_EDGE)
-			    continue;
-			n1->in[n1->n_in++] = n2->in[i];
-			node_t *n3 = g->node[n2->in[i]->n[1]];
-			move_edge_out(g, n3, n2, n1);
-			//for (j = 0; j < n3->n_out; j++)
-			//    if (n3->out[j]->n[1] == n2->id)
-			//	n3->out[j]->n[1] = n1->id;
-		    } else if (j != n1->n_in && n2->in[i]->n[1] != start &&
-			       ((x2+1 >= np2) ||
-				(x2+1 < np2 && path2[x2+1]->id != n2->in[i]->n[1]))) {
-			// shared node, parent(n1) is also parent(n2) and
-			// not on path, so ensure we delete the edge linking
-			//to n2 // although we don't need to add it to n1 as
-			// it's already there.
-			node_t *n3 = g->node[n2->in[i]->n[1]];
-			// remove edge out
-			int k, l;
-			for (k = l = 0; k < n3->n_out; k++) {
-			    if (n3->out[k]->n[1] == n2->id)
-				continue;
-			    n3->out[l++] = n3->out[k];
-			}
-			n3->n_out = l;
-		    }
-		}
-
-		// Merge outgoing
-		for (i = 0; i < n2->n_out; i++) {
-		    // Migrate n2->out unless n2->out on // n1 path
-		    for (j = 0; j < n1->n_out; j++)
-			if (n1->out[j]->n[1] == n2->out[i]->n[1] ||
-			    (x2 > 0 && path2[x2-1] && n2->out[i]->n[1] == path2[x2-1]->id))
-			    break;
-		    if (j == n1->n_out) { // not already a child
-			if (n2->out[i]->n[1] != n_end->id)
-			    move_edge_in(g, n2->out[i], n1, n2);
-		    } else {
-			n1->out[j]->count += n2->out[i]->count;
-		    }
-		}
-		// Cull n1->out that are on n2 path
-		int k;
-		for (j = k = 0; j < n1->n_out; j++) {
-		    for (i = 0; i < n2->n_out; i++)
-			if (x2 > 0 && path2[x2-1] && n1->out[j]->n[1] == path2[x2-1]->id)
-			    break;
-		    if (i == n2->n_out)
-			n1->out[k++] = n1->out[j];
-		}
-		n1->n_out = k;
-
-		// Merge positions
-		//printf("Merge pos %d with %d\n", n1->pos, n2->pos);
-
-		n2->pruned = 1;
-		for (j = 0; j < n2->n_out; j++) {
-		    node_t *t = g->node[n2->out[j]->n[1]];
-		    int l;
-		    for (l = k = 0; k < t->n_in; k++) {
-			if (t->in[k]->n[1] != n2->id)
-			    t->in[l++] = t->in[k];
-		    }
-		    t->n_in = l;
-		}
-		first = 0;
-		x1++, x2++;
-		l1 = n1;
-		l2 = n2;
-	    } else if (op < 0) {
+	    if (op == BAM_CMATCH) {
+		oplen--;
+		node_common_ancestor_match(g, n1, n2, n_end, start, vn,
+					   path1, np1, path2, np2,
+					   &p, &x1, &x2, &l1, &l2);
+	    } else if (op == BAM_CINS) {
 		// Already in path1 only, nothing to do with path2
-		while (op++ && x1 < np1) {
+		while (oplen-- && x1 < np1) {
 		    //printf("D %2d  -\n", n1->id);
 		    //n1->bases[g->kmer-1][4]++;
 		    memcpy(n1->bases, vn[p++], 5*sizeof(int));
 		    n1 = path1[x1++];
 		}
 		l1 = n1;
+		oplen = 0;
 	    } else {
-		// Insertion in path2, link into path1
-		if (!n1)
-		    n1 = g->node[start]; // if inserting to end of alignment
-		int first_ins = 1;
-		while (op-- && x2 < np2) {
-		    //printf("I  - %2d\n", n2->id);
-
-		    if (first_ins) {
-			// Replace l1 in from n1 with in from n2.
-			for (j = 0; j < l1->n_in; j++) {
-			    if (l1->in[j]->n[1] == n1->id) {
-				// FIXME: plus edge hash
-				l1->in[j]->n[1] = n2->id;
-				// FIXME: do we need to ensure this is in[0]?
-			    }
-			}
-
-			// Link n2 out to l1
-			for (j = 0; j < n2->n_out; j++)
-			    if (n2->out[j]->n[1] == l1->id)
-				break;
-			if (j == n2->n_out)
-			    // Move out n2->l2 to n2->l1
-			    move_edge_out(g, n2, l2, l1);
-
-			memcpy(n2->bases, vn[p++], 5*sizeof(int));
-			first_ins = 0;
-		    }
-
-		    if (op == 0 || x2 == np2-1) { // last
-			// Link n2 in to n1
-			// Link n1 out to n2
-			// Cull parent(n2) out (to n2)
-			node_t *p2 = g->node[n2->in[0]->n[1]];
-			n2->in[0]->n[1] = n1->id;
-			for (i = 0; i < n1->n_out; i++)
-			    if (n1->out[i]->n[1] == n2->id)
-				break;
-			if (i == n1->n_out)
-			    // Move n1->l1 to n1->n2
-			    move_edge_out(g, n1, l1, n2);
-
-			if (p2) {
-			    for (i = 0; i < p2->n_out; i++) {
-				if (p2->out[i]->n[1] == n2->id) {
-				    memmove(&p2->out[i], &p2->out[i+1],
-					    (p2->n_out - (i+1)) * sizeof(p2->out[0]));
-				    p2->n_out--;
-				    i--;
-				}
-			    }
-			}
-
-			p++;
-		    }
-
-		    //n2->bases[g->kmer-1][4]++;
-
-		    path2[x2] = NULL;
-		    l2 = n2;
-		    n2 = path2[++x2];
-		}
-
-		l1 = l2;
-		n2 = n1;
+		node_common_ancestor_ins(g, n1, n2, n_end, l1, l2,
+					 start, vn, path1, np1, path2, np2, oplen,
+					 &p, &x1, &x2, &l1, &l2, &n2);
+		oplen = 0;
 	    }
 	}
 
 	// gap at end
 	// TODO: Consider just culling these nodes so cigar generation turns
-	// into soft-clips.  
+	// into soft-clips.
 	while (x1 < np1) {
 	    // Already in path1 only, nothing to do with path2
 	    node_t *n1 = path1[x1];
@@ -1337,7 +1370,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	}
 
 	// TODO: Consider just culling these nodes so cigar generation turns
-	// into soft-clips.  
+	// into soft-clips.
 	node_t *n1 = g->node[start];
 	node_t *n2 = path2[x2];
 	if (x2 < np2) {
@@ -1372,8 +1405,8 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 		move_edge_out(g, n1, l1, n2);
 	}
     }
-    
-    free(S);
+
+    free(cigar);
     free(v1);
     free(v2);
     free(vn);
@@ -1802,7 +1835,7 @@ void tag_hairs(dgraph_t *g) {
 }
 
 
-#if 1
+#if 0
 // Merge nodes n1 onto n2, with relationships n1->c1 and n2->c2.
 // NB: c2 is unrequired, so not specified as an argument.
 // We are culling node n1, so c1 incoming is removed.
@@ -2911,6 +2944,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     // Align ref and consensus to work out regions of heterozygous and
     // non-heterozygous indel.
 
+#if 0
     int *S = malloc((clen+len) * sizeof(*S));
     if (!S)
 	return -1;
@@ -2955,7 +2989,59 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    rp += -op;
 	}
     }
-    
+    free(S);
+#else
+    uint32_t ncigar = 0, *cigar = NULL;
+    int score = ksw_global_end(len, ref, clen, cons, 128, X128, GOPEN, GEXT, 0,
+			       &ncigar, &cigar, 0, 0, 0, 0);
+
+    uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
+    if (!indel)
+	return -1;
+
+    int rp = 0, cp = 0, k = 0;
+    while (rp < len && cp < clen) {
+	if (k >= ncigar)
+	    abort();//break;
+	int op = cigar[k] & BAM_CIGAR_MASK;
+	int oplen = cigar[k++] >> BAM_CIGAR_SHIFT;
+
+	switch(op) {
+	case BAM_CMATCH:
+	    while (oplen-- && rp < len) {
+		if (islower(cons[cp]))
+		    indel[rp] = 1;
+		assert(rp >= 0 && rp < len);
+		rp++; cp++;
+	    }
+	    break;
+
+	case BAM_CDEL: {
+	    // del in ref, or ins in cons
+	    int het = 0;
+	    while (oplen--) {
+		if (islower(cons[cp++]))
+		    het=1;
+	    }
+	    if (het) {
+		indel[rp>0?rp-1:rp] = 1;
+		indel[rp] = 1;
+		assert(rp >= 0 && rp < len);
+	    }
+	    break;
+	}
+
+	case BAM_CINS:
+	    // ins in ref, or del in cons
+	    rp += oplen;
+	    break;
+
+	default:
+	    abort();
+	}
+    }
+    free(cigar);
+#endif
 
     // Find STR and mark nodes as belonging to specific STR numbers.
     rep_ele *reps, *elt, *tmp;
@@ -3104,7 +3190,6 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 
     free(cig_str);
     free(str);
-    free(S);
     free(indel);
 }
 
@@ -3658,8 +3743,9 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     int *cid = nnum+j;
     int cons_len = strlen(cons);
     int ref_len = strlen(ref);
+
+#if 0
     int *S = malloc((cons_len + ref_len) * sizeof(*S));
-#if 1
     align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 4,1, S, 1,1,1,1);
     //display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
 
@@ -3689,40 +3775,58 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
 	    }
 	}
     }
-#else
-    align_ss(ref, cons, ref_len, cons_len, 0, 0, X128, 4,1, S, 1,1,1,1);
-    //display_ss(ref, cons, ref_len, cons_len, S, 0, 0);
 
-    int x1 = 0, x2 = 0, *S2 = S;
+    free(S);
+#else
+    uint32_t ncigar = 0, *cigar = NULL;
+    int score = ksw_global_end(cons_len, cons, ref_len, ref, 128, X128, 4,1, 0,
+			       &ncigar, &cigar, 0,0,0,0);
+
+    int x1 = 0, x2 = 0, k = 0;
     while (x1 < cons_len || x2 < ref_len) {
-	int op = *S2++;
-	if (op == 0) {
-	    // Match
-	    //fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
-	    g->node[cid[x1]]->pos=x2;
-	    g->node[cid[x1]]->ins=0;
-	    x1++, x2++;
-	} else if (op < 0) {
-	    // Deletion in consensus
-	    while (op++) {
-		//fprintf(stderr, "- %c () %d\n", ref[x2], x2);
-		x2++;
+	if (k >= ncigar)
+	    break;
+	int op = cigar[k] & BAM_CIGAR_MASK;
+	int oplen = cigar[k++] >> BAM_CIGAR_SHIFT;
+
+	switch(op) {
+	case BAM_CMATCH:
+	    while (oplen--) {
+		// Match
+		//fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
+		g->node[cid[x1]]->pos=x2;
+		g->node[cid[x1]]->ins=0;
+		x1++, x2++;
 	    }
-	} else if (op > 0) {
+	    break;
+
+	case BAM_CINS: {
 	    // Insertion in consensus
 	    int ival = 0;
-	    while (op--) {
+	    while (oplen--) {
 		g->node[cid[x1]]->pos=x2;
 		g->node[cid[x1]]->ins=++ival;
 		//fprintf(stderr, "%c - @ %d %d.%d\n", cons[x1], cid[x1], x2, ival);
 		x1++;
 	    }
+	    break;
+	}
+
+	case BAM_CDEL:
+	    // Deletion in consensus
+	    while (oplen--) {
+		//fprintf(stderr, "- %c () %d\n", ref[x2], x2);
+		x2++;
+	    }
+	    break;
+
+	default:
+	    abort();
 	}
     }
+
+    free(cigar);
 #endif
-
-    free(S);
-
     free(seq);
     free(nnum);
 }
