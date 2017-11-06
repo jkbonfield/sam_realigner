@@ -347,9 +347,9 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     int seq_len;
 
     char *ref = NULL;
-    if (fai) {
+    if (fai)
 	ref = fai_fetch(fai, region, &seq_len);
-    } else {
+    if (!ref) {
 	ref = cons;
 	seq_len = cons_len;
     }
@@ -754,14 +754,18 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		    end_ovl = right_most;
 		//fprintf(stderr, "PROB extnd %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
 	    } else {
+
+		int start_ovl2 = MAX(1, start_ovl - p->cons_margin);
+		int end_ovl2 = MAX(1, end_ovl + p->cons_margin);
+
 		if (left_most > end_reg && pos > end_ovl + p->cons_margin) {
 		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", pos, start_reg, end_reg, start_ovl, end_ovl);
 		    realign_list(&cd, header, b_hist,
-				 cons  + start_ovl - p->cons_margin - start_cons,
-				 cons2 + start_ovl - p->cons_margin - start_cons,
-				 end_ovl - start_ovl + 2*p->cons_margin,
+				 cons  + start_ovl2 - start_cons,
+				 cons2 + start_ovl2 - start_cons,
+				 end_ovl2 - start_ovl2,
 				 start_reg, end_reg,
-				 start_ovl - p->cons_margin, end_ovl + p->cons_margin,
+				 start_ovl2, end_ovl2,
 				 fai);
 		    start_reg = end_reg = left_most;
 		    start_ovl = end_ovl = 0;
@@ -895,8 +899,8 @@ int main(int argc, char **argv) {
 
     cram_realigner_params params = {
 	.verbose       = 0,                 // -v
-	.ref           = "/nfs/srpipe_references/references/Human/1000Genomes_hs37d5/all/fasta/hs37d5.fa", // -R
-	.region        = NULL,
+	.ref           = NULL,		    // -R
+	.region        = NULL,		    // -r
 	.margin        = MARGIN,            // -m
 	.cons_margin   = CON_MARGIN,        // -c
         .clip_perc     = CLIP_PERC,         // -C
