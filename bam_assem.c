@@ -747,6 +747,18 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 
 	if (len == 0)
 	    return 0;
+    } else {
+	// Ref: prune to no more than kmer-10 Ns
+	char *s2 = seq;
+	int l2 = len;
+	while (*s2 == 'N' && l2 > 0)
+	    s2++, l2--;
+	if (l2 == 0)
+	    return 0;
+	if (len-l2 > g->kmer-10) {
+	    seq = s2 - (g->kmer-10);
+	    len = l2 - (g->kmer-10);
+	}
     }
 
     counter++;
@@ -4221,6 +4233,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		free_haps(ref_, 1);
 		goto bigger_kmer;
 	    }
+	    fprintf(stderr, "No suitable kmer found\n");
 	    g = NULL; goto err;
 	}
 
