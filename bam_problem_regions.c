@@ -72,8 +72,10 @@
 #define MARGIN 100       // margin around suspect regions
 #define CON_MARGIN 100   // margin to add on to consensus when realigning
 
+#define MAX_REG 2000     // maximum size of region to realign
+
 #define MIN_INDEL 2      // FIXME: parameterise
-#define MAX_DEPTH 20000  // FIXME: parameterise
+#define MAX_DEPTH 500   // FIXME: parameterise
 
 // Prevalence of low mapping quality, > PERC => store all
 // Lower => larger files
@@ -107,6 +109,7 @@
 #include <htslib/faidx.h>
 
 #include "tree.h"
+#include "bam_assem.h"
 
 #ifndef MIN
 #define MIN(a,b) ((a)<(b)?(a):(b))
@@ -135,6 +138,7 @@ typedef struct {
     double indel_ov_perc;
     int clevel;
     int cons1, cons2;
+    int max_depth, min_indel;
 } cram_realigner_params;
 
 //-----------------------------------------------------------------------------
@@ -340,7 +344,6 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     int i;
     for (i = 0; i < count; i++)
 	new_pos[i] = ba[i]->core.pos;
-    extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_len, int ref_pos, char *cons1, char *cons2, int len);
 
     char region[1024];
     snprintf(region, 1023, "%s:%d-%d", hdr->target_name[ba[0]->core.tid], start_ovl+1, end_ovl);
@@ -567,6 +570,10 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	if (n_plp > MAX_DEPTH) {
 	    if (p->verbose > 1)
 		fprintf(stderr, "Excessive depth at tid %d, pos %d, depth %d\n", tid, pos, n_plp);
+	    start_reg = end_reg = n_plp ? plp[0].b->core.pos : 0;
+	    start_ovl = end_ovl = 0;
+	    status = S_OK;
+	    flush_pos = start_reg;
 	    goto too_deep;
 	}
 
@@ -748,7 +755,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    break;
 
 	case S_PROB:
-	    if (suspect) {
+	    if (suspect && end_reg - start_reg < MAX_REG) {
 		end_reg = pos + p->margin;
 		if (end_ovl < right_most)
 		    end_ovl = right_most;
@@ -886,6 +893,8 @@ void usage(FILE *fp) {
     fprintf(fp, "-Z float          Suspect if >= [%.2f] indel sizes do not fit bi-modal dist.\n", INS_LEN_PERC);
     fprintf(fp, "-V float          Suspect if <  [%.2f] reads span indel\n", INDEL_OVERLAP_PERC);
     fprintf(fp, "-X int            Whether to add primary (val&1) or secondary (val&2) consensus to graph\n");
+    fprintf(fp, "-d int            Maximum depth to permit realignment [%d]\n", MAX_DEPTH);
+    fprintf(fp, "-i int            Minimum indel depth to trigger realignment [%d]\n", MIN_INDEL);
     fprintf(fp, "\n");
 }
 
@@ -911,9 +920,11 @@ int main(int argc, char **argv) {
 	.clevel        = 6,                 // -u
 	.cons1         = 0,                 // -X
 	.cons2         = 0,                 // -X
+	.max_depth     = MAX_DEPTH,         // -d
+	.min_indel     = MIN_INDEL,         // -i
     };
 
-    while ((opt = getopt(argc, argv, "I:O:m:c:v:M:Z:P:V:r:R:uX:")) != -1) {
+    while ((opt = getopt(argc, argv, "I:O:m:c:vM:Z:P:V:r:R:uX:d:i:")) != -1) {
 	switch (opt) {
 	case 'u':
 	    params.clevel = 0;
@@ -969,6 +980,14 @@ int main(int argc, char **argv) {
 	case 'X':
 	    params.cons1 = atoi(optarg) & 1;
 	    params.cons2 = atoi(optarg) & 2;
+	    break;
+
+	case 'd':
+	    params.max_depth = atoi(optarg);
+	    break;
+
+	case 'i':
+	    params.min_indel = atoi(optarg);
 	    break;
 
 	default: /* ? */

@@ -56,6 +56,7 @@ appropriate location within the string.
 #include "hash_table.h"
 #include "string_alloc.h"
 #include "str_finder.h"
+#include "bam_assem.h"
 
 #include "htslib/sam.h"
 #include "htslib/kstring.h"
