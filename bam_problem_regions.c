@@ -74,6 +74,8 @@
 
 #define MAX_REG 2000     // maximum size of region to realign
 
+#define MAX_READS 2000   // maximum number of reads
+
 #define MIN_INDEL 2      // FIXME: parameterise
 #define MAX_DEPTH 500   // FIXME: parameterise
 
@@ -138,7 +140,7 @@ typedef struct {
     double indel_ov_perc;
     int clevel;
     int cons1, cons2;
-    int max_depth, min_indel;
+    int max_depth, min_indel, max_reg, max_reads;
 } cram_realigner_params;
 
 //-----------------------------------------------------------------------------
@@ -303,6 +305,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     bam_sorted_item *bi, *next;
     int count = 0, ba_sz = 0;
     bam1_t **ba = NULL;
+    uint32_t nbases = 0;
 
     // FIXME start bi at >= start_ovl and then filter until core.pos > end.
     RB_FOREACH(bi, bam_sort, bl) {
@@ -328,8 +331,20 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
 	}
 	ba[count++] = bi->b;
 	//fprintf(stderr, "    %d..%d (of %d..%d)\n", bi->b->core.pos, bi->end_pos, start, end);
+	nbases += bi->b->core.l_qseq;
     }
-    fprintf(stderr, "    Realign %d reads\n", count);
+
+    // Allow some fluidity in region, as we can overflow this a bit with margins.
+    cram_realigner_params *p = cd->params;
+    int depth = nbases / (end_ovl - start_ovl + 1);
+    if (count > p->max_reads || end_ovl - start_ovl + 1 > 2*p->max_reg || depth > p->max_depth) {
+	fprintf(stderr, "    Skipping %d reads, size %d, depth %d\n",
+		count, end_ovl - start_ovl, depth);
+	return 0;
+    }
+
+    fprintf(stderr, "    Realign %d reads, size %d, depth %d\n",
+	    count, end_ovl - start_ovl, depth);
 
     if (count == 0)
 	return 0;
@@ -522,11 +537,12 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
     int start_ovl = INT_MAX, end_ovl = INT_MIN;
 
     int right_most = 0;
-    int flush_pos = 0;
+    int flush_pos = 0, last_pos = 0;
+    int nreads = 0;
 
     // Primary and secondary consensus computed on-the-fly.  Optionally
     // used in assembly graph generation.
-    char *cons = malloc(1024), *cons2 = malloc(1024);
+    char *cons = calloc(1,1024), *cons2 = calloc(1,1024);
     assert(p->cons_margin < 1024);
     assert(p->margin < 1024);
     memset(cons,  'N', 1024);
@@ -651,6 +667,10 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    if (!cons || !cons2)
 		return -1;
 	}
+	if (last_pos && pos > last_pos+1) {
+	    memset(&cons [last_pos+1 - start_cons], 'N', pos - (last_pos+1));
+	    memset(&cons2[last_pos+1 - start_cons], 'N', pos - (last_pos+1));
+	}
 	cons [pos - start_cons] = call;
 	cons2[pos - start_cons] = call2;
 
@@ -738,11 +758,14 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 
 	// If suspect, expand the regions out and compute overlap
 	// extents.
+	if (!last_pos)
+	    last_pos = pos;
+
 	switch(status) {
 	case S_OK:
 	    if (suspect) {
-		start_reg = pos - p->margin;
-		end_reg = pos + p->margin;
+		start_reg = last_pos - p->margin;
+		end_reg = last_pos + p->margin;
 		start_ovl = left_most;
 		end_ovl = right_most;
 		check_overlap(b_hist, start_reg, &start_ovl, &end_ovl);
@@ -755,8 +778,8 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    break;
 
 	case S_PROB:
-	    if (suspect && end_reg - start_reg < MAX_REG) {
-		end_reg = pos + p->margin;
+	    if (suspect && end_reg - start_reg < p->max_reg && nreads < p->max_reads) {
+		end_reg = last_pos + p->margin;
 		if (end_ovl < right_most)
 		    end_ovl = right_most;
 		//fprintf(stderr, "PROB extnd %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
@@ -766,7 +789,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		int end_ovl2 = MAX(1, end_ovl + p->cons_margin);
 
 		if (left_most > end_reg && pos > end_ovl + p->cons_margin) {
-		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", pos, start_reg, end_reg, start_ovl, end_ovl);
+		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", last_pos, start_reg, end_reg, start_ovl, end_ovl);
 		    realign_list(&cd, header, b_hist,
 				 cons  + start_ovl2 - start_cons,
 				 cons2 + start_ovl2 - start_cons,
@@ -778,6 +801,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		    start_ovl = end_ovl = 0;
 		    status = S_OK;
 		    flush_pos = left_most - p->margin;
+		    nreads = 0;
 		}
 	    }
 
@@ -799,11 +823,14 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    // Note: this may reorder seqs that start at the same coord,
 	    // so we give it the read-id to preserve the order.
 	    insert_bam_list(b_hist, bam_dup1(b));
+	    nreads++;
 	}
 
 	// Flush history (preserving sort order).
 	if (flush_bam_list(&cd, b_hist, INT_MAX, flush_pos, out, header) < 0)
 	    return -1;
+
+	last_pos = pos;
     }
     fai_destroy(fai);
 
@@ -893,8 +920,10 @@ void usage(FILE *fp) {
     fprintf(fp, "-Z float          Suspect if >= [%.2f] indel sizes do not fit bi-modal dist.\n", INS_LEN_PERC);
     fprintf(fp, "-V float          Suspect if <  [%.2f] reads span indel\n", INDEL_OVERLAP_PERC);
     fprintf(fp, "-X int            Whether to add primary (val&1) or secondary (val&2) consensus to graph\n");
-    fprintf(fp, "-d int            Maximum depth to permit realignment [%d]\n", MAX_DEPTH);
     fprintf(fp, "-i int            Minimum indel depth to trigger realignment [%d]\n", MIN_INDEL);
+    fprintf(fp, "-d int            Maximum depth to permit realignment [%d]\n", MAX_DEPTH);
+    fprintf(fp, "-n int            Maximum number of reads to permit realignment [%d]\n", MAX_READS);
+    fprintf(fp, "-N int            Maximum region size for realignment [%d]\n", MAX_REG);
     fprintf(fp, "\n");
 }
 
@@ -922,9 +951,11 @@ int main(int argc, char **argv) {
 	.cons2         = 0,                 // -X
 	.max_depth     = MAX_DEPTH,         // -d
 	.min_indel     = MIN_INDEL,         // -i
+	.max_reads     = MAX_READS,         // -n
+	.max_reg       = MAX_REG,           // -N
     };
 
-    while ((opt = getopt(argc, argv, "I:O:m:c:vM:Z:P:V:r:R:uX:d:i:")) != -1) {
+    while ((opt = getopt(argc, argv, "I:O:m:c:vM:Z:P:V:r:R:uX:d:i:n:N:")) != -1) {
 	switch (opt) {
 	case 'u':
 	    params.clevel = 0;
@@ -988,6 +1019,14 @@ int main(int argc, char **argv) {
 
 	case 'i':
 	    params.min_indel = atoi(optarg);
+	    break;
+
+	case 'n':
+	    params.max_reads = atoi(optarg);
+	    break;
+
+	case 'N':
+	    params.max_reg = atoi(optarg);
 	    break;
 
 	default: /* ? */
