@@ -4231,7 +4231,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	    fprintf(stderr, "Loop when adding reference\n");
 	    graph_destroy(g);
 	    if ((kmer += 10) < MAX_KMER) {
-		free_haps(ref_, 1);
+		free_haps(ref_, 1); ref_ = NULL;
 		goto bigger_kmer;
 	    }
 	    fprintf(stderr, "No suitable kmer found\n");
@@ -4251,8 +4251,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER) {
-	    free_haps(cons, 1);
-	    free_haps(ref_, 1);
+	    free_haps(cons, 1); cons = NULL;
+	    free_haps(ref_, 1); ref_ = NULL;
 	    goto bigger_kmer;
 	}
 	g = NULL;
@@ -4265,8 +4265,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	graph_destroy(g);
 	g = NULL;
 	kmer += KMER_INC_FINAL;
-	free_haps(cons, 1);
-	free_haps(ref_, 1);
+	free_haps(cons, 1); cons = NULL;
+	free_haps(ref_, 1); ref_ = NULL;
 	goto bigger_kmer;
     }
 
@@ -4304,8 +4304,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	if (loop_check(g, 0)) {
 	    // adding consensus caused loop; give up on that idea.
 	    cons1 = cons2 = NULL;
-	    free_haps(cons, 1);
-	    free_haps(ref_, 1);
+	    free_haps(cons, 1); cons = NULL;
+	    free_haps(ref_, 1); ref_ = NULL;
 	    goto bigger_kmer;
 	}
 	find_bubbles(g, 1, 0);
