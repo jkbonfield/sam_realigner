@@ -1,4 +1,4 @@
-ALL=assem_bam_k3 assem_bam_k4 assem_bam_k13 assem_bam_k18 bam_problem_regions
+ALL=assem_bam_k3 assem_bam_k4 assem_bam_k13 assem_bam_k18 bam_realign
 
 CC=cc
 CFLAGS=-g
@@ -100,7 +100,5 @@ $(UPDATE_KMERS):
 	    fi; \
 	done
 
-# A test program for finding regions to realign.
-# Could also be used to replace the GATK component?
-bam_problem_regions: $(OBJS) bam_problem_regions.o bam_assem.o
-	$(CC) -o $@ $(OBJS) bam_problem_regions.o bam_assem.o $(LDFLAGS) $(LIBS)
+bam_realign: $(OBJS) bam_realign.o bam_assem.o
+	$(CC) -o $@ $(OBJS) bam_realign.o bam_assem.o $(LDFLAGS) $(LIBS)
