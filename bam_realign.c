@@ -338,13 +338,13 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     cram_realigner_params *p = cd->params;
     int depth = nbases / (end_ovl - start_ovl + 1);
     if (count > p->max_reads || end_ovl - start_ovl + 1 > 2*p->max_reg || depth > p->max_depth) {
-	fprintf(stderr, "    Skipping %d reads, size %d, depth %d\n",
-		count, end_ovl - start_ovl, depth);
+	fprintf(stderr, "    Skipping %d reads, size %d, depth %d, region %d-%d\n",
+		count, end_ovl - start_ovl, depth, start_ovl, end_ovl);
 	return 0;
     }
 
-    fprintf(stderr, "    Realign %d reads, size %d, depth %d\n",
-	    count, end_ovl - start_ovl, depth);
+    fprintf(stderr, "    Realign %d reads, size %d, depth %d, region %d-%d\n",
+	    count, end_ovl - start_ovl, depth, start_ovl, end_ovl);
 
     if (count == 0)
 	return 0;

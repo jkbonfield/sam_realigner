@@ -52,11 +52,13 @@ appropriate location within the string.
 #include <math.h>
 #include <assert.h>
 #include <limits.h>
+#include <ctype.h>
 
 #include "hash_table.h"
 #include "string_alloc.h"
 #include "str_finder.h"
 #include "bam_assem.h"
+#include "ksw.h"
 
 #include "htslib/sam.h"
 #include "htslib/kstring.h"
@@ -89,6 +91,8 @@ void init_base_val(void) {
     base_val['*'] = 4;
 }
 
+typedef unsigned char uc;
+
 // Ambiguity codes include base-pad combinations.
 // We set the scores so that given the choice of aligning
 // A vs AC ambig or A* ambig, the AC scores higher.  Thus by
@@ -102,17 +106,17 @@ void init_X128_score(int mis, int mat) {
 
     // Matches
     for (i = 0; i < 4; i++)
-	X128["ACGT"[i]]["ACGT"[i]] = mat;
+	X128[(uc)"ACGT"[i]][(uc)"ACGT"[i]] = mat;
 
     // Ambiguity codes; partial match
     for (i = 0; i < 3; i++)
-	X128['A']["MRW"[i]] = X128["MRW"[i]]['A'] = mat/2;
+	X128['A'][(uc)"MRW"[i]] = X128[(uc)"MRW"[i]]['A'] = mat/2;
     for (i = 0; i < 3; i++)
-	X128['C']["MSY"[i]] = X128["MSY"[i]]['C'] = mat/2;
+	X128['C'][(uc)"MSY"[i]] = X128[(uc)"MSY"[i]]['C'] = mat/2;
     for (i = 0; i < 3; i++)
-	X128['G']["RSK"[i]] = X128["RSK"[i]]['G'] = mat/2;
+	X128['G'][(uc)"RSK"[i]] = X128[(uc)"RSK"[i]]['G'] = mat/2;
     for (i = 0; i < 3; i++)
-	X128['T']["WYK"[i]] = X128["WYK"[i]]['T'] = mat/2;
+	X128['T'][(uc)"WYK"[i]] = X128[(uc)"WYK"[i]]['T'] = mat/2;
     // Ambiguity codes; mismatch (B = not A; D = not C; etc)
     X128['A']['B'] = X128['B']['A'] = mis/2;
     X128['C']['D'] = X128['D']['C'] = mis/2;
@@ -123,16 +127,16 @@ void init_X128_score(int mis, int mat) {
     // All to start with, to set mismatch (A vs G*) baseline.
     for (i = 0; i < 11; i++) {
 	for (j = 0; j < 11; j++) {
-	    X128["AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis;	
-	    X128[tolower("AMRWCSYGKTN"[i])]["AMRWCSYGKTN"[j]] = mis;
+	    X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis;	
+	    X128[tolower("AMRWCSYGKTN"[i])][(uc)"AMRWCSYGKTN"[j]] = mis;
 	    // A* vs C* is a partial match (pad wise). How to score?
 	    X128[tolower("AMRWCSYGKTN"[i])][tolower("AMRWCSYGKTN"[j])] = mis/2;
 	}
     }
     // Now fix up the partial matches (A vs A*).
     for (i = 0; i < 4; i++) {
-	X128["ACGT"[i]][tolower("ACGT"[i])] = mat/2-1;
-	X128[tolower("ACGT"[i])]["ACGT"[i]] = mat/2-1;
+	X128[(uc)"ACGT"[i]][tolower("ACGT"[i])] = mat/2-1;
+	X128[tolower("ACGT"[i])][(uc)"ACGT"[i]] = mat/2-1;
 	X128[tolower("ACGT"[i])][tolower("ACGT"[i])] = mat/2-1;
     }
 
@@ -145,8 +149,8 @@ void init_X128_score(int mis, int mat) {
 
     // Base vs pad is bad, worse than opening a new gap.
     for (i = 0; i < 11; i++) {
-	X128["AMRWCSYGKTN"[i]]['-'] = X128['-'][tolower("AMRWCSYGKTN"[i])] = mis*2;
-	X128[tolower("AMRWCSYGKTN"[i])]['-'] = X128['-']["AMRWCSYGKTN"[i]] = mis*2;
+	X128[(uc)"AMRWCSYGKTN"[i]]['-'] = X128['-'][tolower("AMRWCSYGKTN"[i])] = mis*2;
+	X128[tolower("AMRWCSYGKTN"[i])]['-'] = X128['-'][(uc)"AMRWCSYGKTN"[i]] = mis*2;
     }
 }
 
@@ -443,7 +447,7 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
 	node->pos = INT_MIN;
 	int j;
 	for (j = 0; j < len; j++)
-	    node->bases[j][base_val[seq[j] & 0x7f]]++;
+	    node->bases[j][(uc)base_val[seq[j] & 0x7f]]++;
 	node->count = 0;
 
 	HashData hd;
@@ -1230,10 +1234,12 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     for (i = g->kmer-2; l && i >= 0; i--)
 	memcpy(v2[len2++], l->bases[i], 5*sizeof(int));
 
-    uint32_t *cigar = NULL, ncigar = 0;
+    uint32_t *cigar = NULL;
+    int ncigar = 0;
     char *vs1 = vec2seq(v1, len1);
     char *vs2 = vec2seq(v2, len2);
-    ksw_global_end(len1, vs1, len2, vs2, 128, (uint8_t *)X128, GOPEN, GEXT, 0,
+    ksw_global_end(len1, (uint8_t *)vs1, len2, (uint8_t *)vs2,
+		   128, (int8_t *)X128, GOPEN, GEXT, 0,
 		   &ncigar, &cigar,  1,1,1,1);
     free(vs1);
     free(vs2);
@@ -1261,7 +1267,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 
     // Merge v1/v2 into vn.  FIXME v1/v2 into v2 is simpler
     {
-	int first = 1, x1 = 0, x2 = 0, p = 0;
+	int x1 = 0, x2 = 0, p = 0;
 
 	int cig_ind = 0;
 	while (x1 < len1 && x2 < len2) {
@@ -1332,7 +1338,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     // => path 2:  14 13 12
 
     {
-	int first = 1, cig_ind = 0, oplen = 0, op;
+	int cig_ind = 0, oplen = 0, op;
 	int x1 = 0, x2 = 0, p = 0;
 
 	node_t *l1 = n_end;
@@ -1426,12 +1432,10 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     free(path1);
     free(path2);
 
-    if (0) {
-	static int n=0;
-	char buf[100];
-	sprintf(buf, "_bub%d.dot", n++);
-	graph2dot(g, buf, 0);
-    }
+//	static int n=0;
+//	char buf[100];
+//	sprintf(buf, "_bub%d.dot", n++);
+//	graph2dot(g, buf, 0);
 
     return 0;
 }
@@ -1484,7 +1488,7 @@ void rewind_paths(dgraph_t *g, path_t **phead, int n_id, node_t *n_end) {
 // which paths are involved.
 int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis, int *nvis) {
     int p_id = 1;
-    int i, v;
+    int i;
     path_t *head = path_create(p_id++);
     int active = 1;
     int ret = 1;
@@ -1498,7 +1502,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 
     // Iterate
     while (head && active) {
-	path_t *p, *lp = NULL, *llp, *pnext = NULL;
+	path_t *p, *lp = NULL, *pnext = NULL;
 
 //	printf("Active paths @");
 //	for (p = head; p; p = p->next)
@@ -1795,7 +1799,6 @@ int tag_tail_from(dgraph_t *g, int parent, int id) {
 
 void tag_head_from(dgraph_t *g, int parent, int is_head, int id) {
     node_t *n = g->node[id];
-    node_t *f = n, *l = n;
 
     //printf(">>>%d,%d,%d\n", parent, is_head, id);
 
@@ -1822,7 +1825,6 @@ void tag_head_from(dgraph_t *g, int parent, int is_head, int id) {
 	if (n->n_out == 0)
 	    break;
 
-	l = n;
 	n = g->node[n->out[0]->n[1]];
     }
 }
@@ -2139,8 +2141,6 @@ int merge_tail_tips(dgraph_t *g) {
 #endif
 
 void prune(dgraph_t *g, int min_count) {
-    int done_something;
-
     //    break_weak(g, min_count); FIXME for ref
     //burst_bubbles(g, min_count);
 
@@ -2610,7 +2610,7 @@ void bam_set_seqi_base(bam1_t *b, int pos, char base) {
     if (!init) {
 	int i;
 	for (i = 0; i < 16; i++)
-	    L["=ACMGRSVTWYHKDBN"[i]] = i;
+	    L[(uc)"=ACMGRSVTWYHKDBN"[i]] = i;
 	init = 1;
     }
 
@@ -2625,7 +2625,9 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
     int cig_op = 999, cig_len = 0;
     int first_go = 1;
     int seq_start = 0;
+#ifndef NO_QUAL_FIX
     char *orig_seq = seq;
+#endif
     int len = strlen(seq);
     int ref_len = strlen(ref);
 
@@ -2635,13 +2637,12 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 
     *new_pos = b->core.pos; // default to original
 
-    int cig_a[MAX_CIGAR];
+    uint32_t cig_a[MAX_CIGAR];
     int cig_ind = 0;
 
     //fprintf(stderr, "Orig seq = %.*s\n", len, seq);
 
     int last_ins = 0;
-    int since_mat = 0;
  try_again:
     // First node
     for (i = seq_start; i < len-g->kmer; i++) {
@@ -2665,7 +2666,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 //	}
 //    }
 
-    int pos = 0, j, padded = 0;
+    int pos = 0, j;
 
     if (n->pos >= 0 /*&& (first_go || n->ins == 0)*/ /*|| (n->ref & IS_CON)*/) {
 //	int np_dist = 0;
@@ -2753,8 +2754,10 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	// Trace path for each successive node.
 	char *s1 = seq+i;
 	char s2[MAX_KMER*2];
+#ifndef NO_QUAL_FIX
 	uint8_t *bam_seq = bam_get_seq(b);
 	uint8_t *bam_qual = bam_get_qual(b);
+#endif
 	for (; i <= len - g->kmer; i++) {
 #ifndef NO_QUAL_FIX
 	    if (orig_seq[i+g->kmer-1] == "=ACMGRSVTWYHKDBN"[bam_seqi(bam_seq, i+g->kmer-1)])
@@ -2808,8 +2811,6 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		// kmer stepping? (ie deletion)
 
 		// bubble up to check if D or P before I
-		node_t *np = NULL, *nn = n;
-		int path[MAX_SEQ] = {0}, path_ind = 0;
 		if (n->ins > last_ins+1)
 		    ADD_CIGAR(BAM_CPAD, n->ins - (last_ins+1));
 	    
@@ -3004,9 +3005,11 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     }
     free(S);
 #else
-    uint32_t ncigar = 0, *cigar = NULL;
-    int score = ksw_global_end(len, ref, clen, cons, 128, X128, GOPEN, GEXT, 0,
-			       &ncigar, &cigar, 0, 0, 0, 0);
+    uint32_t *cigar = NULL;
+    int ncigar = 0;
+    ksw_global_end(len, (uint8_t *)ref, clen, (uint8_t *)cons,
+		   128, (int8_t *)X128, GOPEN, GEXT, 0,
+		   &ncigar, &cigar, 0, 0, 0, 0);
 
     uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
     if (!indel)
@@ -3105,7 +3108,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    STR |= str[new_pos[i]-start-1]; // incase we start in an insertion
 	int sp, rp; // seq & ref pos
 	//fprintf(stderr, "Name: %s\t", bam_get_qname(b));
-	uint8_t *seq = bam_get_seq(b);
+	//uint8_t *seq = bam_get_seq(b);
 	int op_len = 0, op, cig_ind = 0;
 	uint32_t *cig = bam_get_cigar(b);
 	int adjacent_STR = 0;
@@ -3121,8 +3124,8 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	cig_ind = cig_str_ind = 0;
 	//for (sp = 0, rp = b->core.pos; sp < b->core.l_qseq; ) {
 	for (sp = 0, rp = new_pos[i]; sp < b->core.l_qseq; ) {
-	    char sbase = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, sp)];
-	    char rbase = rp >= start && rp < start+len ? ref[rp-start] : 'N';
+	    //char sbase = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, sp)];
+	    //char rbase = rp >= start && rp < start+len ? ref[rp-start] : 'N';
 	    if (op_len == 0) {
 		if (cig_ind < b->core.n_cigar) {
 		    op = bam_cigar_op(cig[cig_ind]);
@@ -3181,7 +3184,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    fprintf(stderr, "trim %d, shift %d\t", left_trim, left_shift);
 	    int k;
 	    for (k = 0; k < cig_str_ind; k++)
-		fputc("MIDNSHP=XB"[cig_str[k]], stderr);
+		fputc("MIDNSHP=XB"[(uc)cig_str[k]], stderr);
 	    fputc('\n', stderr);
 	}
 
@@ -3204,6 +3207,8 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     free(cig_str);
     free(str);
     free(indel);
+
+    return 0;
 }
 
 int int64_compar(const void *vp1, const void *vp2) {
@@ -3229,7 +3234,7 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
     memcpy(seq2, prefix2, len);
     seq_idx += len;
 
-    node_t *n = g->node[x], *norig = n;
+    node_t *n = g->node[x];
     if (!prefix) {
 	// Note: currently uses first tagged seq only per node, but this is
 	// valid as we should only use follow_graph before bubble collapsing.
@@ -3255,7 +3260,7 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
 
     if (n->n_out > 1 /*&& n->visited != 'h'*/) {
 	int i;
-	n->visited == 'h';
+	n->visited = 'h';
 
 	// Recurse down best route first
 	uint64_t *counts = malloc(n->n_out * sizeof(*counts));
@@ -3282,7 +3287,7 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
 	free(seq2);
     } else {
 	//fprintf(stderr, "haplotype: %d..%d %.*s\n", norig->id, n->id, seq_idx, seq);
-	*nh++;
+	(*nh)++;
 	hseqs *h2 = calloc(1, sizeof(*h2));
 	h2->next = h;
 	h2->seq = seq;
@@ -3322,7 +3327,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	for (j = 0; j < len-errk; j++) {
 	    HashData hd;
 	    HashItem *hi;
-	    int nw, k;
+	    int nw;
 
 	    hd.i = 0;
 	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
@@ -3343,7 +3348,6 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	//printf("%.*s %d\n", errk, hi->key, hi->data.i);
 	if (hi->data.i >= avg) {
 	    int j;
-	    char *s = hi->key;
 	    char N[errk];
 	    memcpy(N, hi->key, errk);
 	    for (j = 0; j < errk; j++) {
@@ -3380,7 +3384,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     int nc = 0;
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
-	char *qual = h[i].qual;
+	uint8_t *qual = h[i].qual;
 	char *s2 = strdup(seq);
 	int len = strlen(seq), j;
 #define EDGE_DIST 3
@@ -3791,9 +3795,11 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
 
     free(S);
 #else
-    uint32_t ncigar = 0, *cigar = NULL;
-    int score = ksw_global_end(cons_len, cons, ref_len, ref, 128, X128, 4,1, 0,
-			       &ncigar, &cigar, 0,0,0,0);
+    uint32_t *cigar = NULL;
+    int ncigar = 0;
+    ksw_global_end(cons_len, (uint8_t *)cons, ref_len, (uint8_t *)ref,
+		   128, (int8_t *)X128, 4,1, 0,
+		   &ncigar, &cigar, 0,0,0,0);
 
     int x1 = 0, x2 = 0, k = 0;
     while (x1 < cons_len || x2 < ref_len) {
@@ -3881,6 +3887,7 @@ void free_haps(haps_t *h, int n) {
     free(h);
 }
 
+#if 0
 static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int ref_len, int ref_start,
 		       char *cons1, char *cons2, int cons_len) {
     samFile *fp;
@@ -3901,6 +3908,7 @@ static void dump_input(bam_hdr_t *hdr, bam1_t **bams, int nbams, char *ref, int 
     fprintf(f, ">%d\n%.*s\n", ref_start, ref_len, ref);
     fclose(f);
 }
+#endif
 
 // Add 'number of nodes above' and 'number of nodes below' figures to
 // every node.  If we have an incoming fork, number of nodes above is
@@ -4399,7 +4407,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 bam1_t **load_bam(char *fn, int *nrecs, bam_hdr_t **hdr_p) {
     samFile *in = sam_open(fn, "r");
     bam_hdr_t *hdr;
-    int nalloc = 128, nr = 0, i;
+    int nalloc = 128, nr = 0;
     bam1_t **bams = calloc(128, sizeof(*bams));
 
     if (!in)
