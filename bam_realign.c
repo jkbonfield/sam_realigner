@@ -254,6 +254,8 @@ typedef struct {
 
 int flush_bam_list(pileup_cd *cd, bam_sorted_list *bl, int before_tid, int before, samFile *out, bam_hdr_t *header) {
     bam_sorted_item *bi, *next;
+    int before2 = before;
+    int left_most = before;
 
     // Sanity check
     int last_pos = 0;
@@ -262,7 +264,18 @@ int flush_bam_list(pileup_cd *cd, bam_sorted_list *bl, int before_tid, int befor
 	    assert(bi->b->core.pos >= last_pos);
 	    last_pos = bi->b->core.pos;
 	}
+
+	// We flush typically to left_most (the left_most base overlapping current pos),
+	// but we realign to pos - p->margin.  Therefore we need to correct our 'before'
+	// value here too to compensate for the failure to call this correctly.
+	// (It's easier to do this here than the several places it is called.)
+	if (before2 < bi->end_pos && left_most > bi->b->core.pos)
+	    left_most = bi->b->core.pos;
     }
+    if (before != INT_MAX)
+	before = left_most > cd->params->margin
+	    ? left_most - cd->params->margin
+	    : 0;
 
     for (bi = RB_MIN(bam_sort, bl); bi; bi = next) {
 	next = RB_NEXT(bam_sort, bl, bi);
@@ -283,12 +296,10 @@ int flush_bam_list(pileup_cd *cd, bam_sorted_list *bl, int before_tid, int befor
 //-----------------------------------------------------------------------------
 // Interface to the realigner code
 int check_overlap(bam_sorted_list *bl, int start, int *start_ovl, int *end_ovl) {
-    bam_sorted_item *bi, *next;
-    int count = 0;
+    bam_sorted_item *bi;
     RB_FOREACH(bi, bam_sort, bl) {
 	if (bi->end_pos < start)
 	    continue;
-	    
 	if (*start_ovl > bi->b->core.pos)
 	    *start_ovl = bi->b->core.pos;
 	if (*end_ovl < bi->end_pos)
@@ -523,8 +534,6 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 
     p_iter = bam_plp_init(pileup_callback, &cd);
     bam_plp_set_maxcnt(p_iter, INT_MAX);
-    int min_pos = INT_MAX, max_pos = 0;
-    int min_pos2 = INT_MAX, max_pos2 = 0;
 
     int64_t total_depth = 0, total_col = 0;
 
@@ -555,8 +564,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 
     faidx_t *fai = p->ref ? fai_load(p->ref) : NULL;
     while ((plp = bam_plp_auto(p_iter, &tid, &pos, &n_plp))) {
-	int i, preserve = 0, indel = 0;
-	unsigned char base;
+	int i;
 
 	if (tid != last_tid) {
 	    // Ensure b_hist is only per chromosome
@@ -589,7 +597,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    start_reg = end_reg = n_plp ? plp[0].b->core.pos : 0;
 	    start_ovl = end_ovl = 0;
 	    status = S_OK;
-	    flush_pos = start_reg;
+	    flush_pos = MIN(start_reg, last_pos ? last_pos : start_reg) - p->margin;
 	    goto too_deep;
 	}
 
@@ -693,8 +701,6 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	indel_depth[0] = 0;
 	int clipped = 0, n_overlap = 0;
 	for (i = 0; i < n_plp; i++) {
-	    int is_indel = (plp[i].indel || plp[i].is_del);
-
 	    if ((plp[i].is_head && plp[i].qpos > 0) ||
 		(plp[i].is_tail && plp[i].qpos+1 < plp[i].b->core.l_qseq))
 		clipped++;
