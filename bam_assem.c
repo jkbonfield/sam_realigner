@@ -62,12 +62,66 @@ appropriate location within the string.
 
 #include "htslib/sam.h"
 #include "htslib/kstring.h"
+#include "htslib/khash.h"
 
 #define IS_REF 1
 #define IS_CON 2
 
 #define GOPEN 8
 #define GEXT  4
+
+//-----------------------------------------------------------------------------
+// Khash interface to kmer indexing, with variable sized kmer.
+//
+// Khash's string interface is strictly nul terminated char *.  We wish to
+// iterate over a string kmer bases at a time without having to nul terminate
+// or take copies of the string.  We do this by defining our key to be a small
+// structure.
+
+typedef struct node_t node_t;
+
+typedef struct {
+    // add struct kmer_key *next;   May replace node->hi / node->n_hi array?
+    const char *key;
+    int key_len;
+} kmer_key;
+
+// Variable sized non-terminated keys
+#define KHASH_MAP_INIT_KMER(name, khval_t)				\
+    KHASH_INIT(name, kmer_key*, khval_t, 1, kh_kmer_hash_func, kh_kmer_hash_equal)
+
+// Requires fixed kmer_key size
+static inline int kh_kmer_hash_equal(const kmer_key *a, const kmer_key *b) {
+    return memcmp(a->key, b->key, a->key_len);
+}
+
+static inline khint_t kh_kmer_hash_func(const kmer_key *k) {
+    const char *s = k->key;
+    khint_t h, i;
+    for (h = i = 0; i < k->key_len; i++) h = (h << 5) - h + (khint_t)s[i];
+    return h;
+}
+
+//---------------------------------------------------------------------------
+// Khash interface to kmer indexing, with compile-time fixed kmer.
+//
+// We have a dedicated hash_equal and hash_func per kmer value (templated
+// on size), along with associated KHASH_MAP_INIT calls to use these.
+
+#define KHASH_KMER_INIT(N) \
+    /* Requires fixed kmer_key size */ \
+    static inline int kh_kmer##N##_hash_equal(const char *a, const char *b) { \
+        return memcmp(a, b, N) == 0; \
+    } \
+    \
+    static inline khint_t kh_kmer##N##_hash_func(const char *s) { \
+        khint_t h, i; \
+        for (h = i = 0; i < N; i++) h = (h << 5) - h + (khint_t)s[i]; \
+        return h; \
+    }
+
+#define KHASH_MAP_INIT_KMER_N(name, khval_t, N) \
+    KHASH_INIT(name##N, char*, khval_t, 1, kh_kmer##N##_hash_func, kh_kmer##N##_hash_equal)
 
 //---------------------------------------------------------------------------
 
@@ -317,6 +371,7 @@ typedef struct {
     edge_t **edge;
     int nedges, aedges;
 
+    //    node_hash_t *_node_hash;  // "seq" -> node
     HashTable *node_hash;  // "seq" -> node
     HashTable *edge_hash;  // id[2] -> edge
 
@@ -377,6 +432,8 @@ void graph_destroy(dgraph_t *g) {
     if (g->node_hash)
 	HashTableDestroy(g->node_hash, 0);
 
+    //kh_destroy(node_hash, g->_node_hash);
+
     if (g->edge_hash)
 	HashTableDestroy(g->edge_hash, 0);
 
@@ -402,7 +459,9 @@ dgraph_t *graph_create(int kmer) {
     if (!g) return NULL;
 
     g->kmer = kmer;
-    g->node_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    //g->_node_hash = kh_init(node_hash);
+    //g->node_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    g->node_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS);
     if (!g->node_hash) {
 	graph_destroy(g);
 	return NULL;
@@ -456,6 +515,12 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
 
 	node->hi = realloc(node->hi, (node->n_hi+1) * sizeof(*node->hi));
 	node->hi[node->n_hi++] = hi;
+
+	//khint_t k, ret;
+	//kmer_key kk = {seq, len}; // FIXME: must hang around, so change to global.
+	//k = kh_put(node_hash, g->_node_hash, &kk, &ret);
+	//kh_value(g->_node_hash, k) = node;
+
 //    } else {
 //	node->seq = NULL;
 //	node->len = 0;
@@ -467,9 +532,12 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
     return node;
 }
 
-// FIXME: speed up via hash or similar
 node_t *find_node(dgraph_t *g, char *seq, int len, int add) {
+    //kmer_key kk = {seq, len};
+    //khint_t k = kh_get(node_hash, g->_node_hash, &kk);
+
     HashItem *hi = HashTableSearch(g->node_hash, seq, len);
+    //assert(hi ? k != kh_end(g->_node_hash) : k == kh_end(g->_node_hash));
     if (hi)
 	return (node_t *)hi->data.p;
 
@@ -768,7 +836,7 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 
     counter++;
 
-    char *s = malloc(len);
+    char *s = string_alloc(g->spool, len);
     for (i = j = 0; i < len; i++)
 	if (seq[i] != '*')
 	    s[j++] = toupper(seq[i]);
@@ -782,7 +850,6 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 
 	if (g->node[e->n[1]]->visited == counter) {
 	    // cull edge
-	    free(s);
 	    return -1; // loop
 	}
 
@@ -803,8 +870,6 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 	    n2->ref |= ref;
 	}
     }
-
-    free(s);
 
     return 0;
 }
@@ -3299,25 +3364,24 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
     return h;
 }
 
-#ifndef ERRK
-#define ERRK 30
-#endif
-
 // FIXME: min_count needs to be depth based.  Find mean count and
 // use this to cap min_count?  So low coverage would reduce,
 // min_count, but high coverage or lots of low complexity data won't
 // increase it.
-HashTable *kmer_hash = NULL, *neighbours = NULL;
 int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
-    //HashTable *hash, *neighbours;
+    HashTable *kmer_hash = NULL, *neighbours = NULL;
     HashItem *hi;
     int i, counth = 0, countw = 0;
+    string_alloc_t *sp = string_pool_create(errk*10000);
+
+    /*  Keep copy of sequences, so updating doesn't invalidate the hash table. */
+    char **old_seq = calloc(n, sizeof(char *));
+    if (!old_seq)
+	return -1;
 
     HashTable *hash = kmer_hash;
-    if (hash) HashTableDestroy(hash, 0);
-    if (neighbours) HashTableDestroy(neighbours, 0);
     
-    hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
     kmer_hash = hash;
 
     // Hash words
@@ -3341,51 +3405,38 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 
     // Find common words and produce neighbourhoods
     int avg = 2*ceil((double)countw / counth); // FIXME: improve this
-    neighbours = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    neighbours = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
 
     HashIter *hiter = HashTableIterCreate();
     while ((hi = HashTableIterNext(hash, hiter))) {
-	//printf("%.*s %d\n", errk, hi->key, hi->data.i);
 	if (hi->data.i >= avg) {
+	    //fprintf(stderr, "%.*s %d\n", errk, hi->key, hi->data.i);
 	    int j;
-	    char N[errk];
-	    memcpy(N, hi->key, errk);
 	    for (j = 0; j < errk; j++) {
 		int nw, k;
 		HashData hd;
 		hd.p = hi->key;
-		int base = N[j];
+		int base = hi->key[j];
 		for (k = 0; k < 4; k++) {
 		    HashItem *hi2;
 		    if ("ACGT"[k] == base) continue;
+		    char *N = string_alloc(sp, errk);
+		    memcpy(N, hi->key, errk);
 		    N[j] = "ACGT"[k];
 		    hi2 = HashTableAdd(neighbours, N, errk, hd, &nw);
 		    if (!nw) hi2->data.p = NULL; // mark the clash
 		}
-		N[j] = base;
 	    }
 	}
     }
-
-//    // Debug: find rare words and report if they have a common neighbour
-//    HashTableIterReset(hiter);
-//    while ((hi = HashTableIterNext(hash, hiter))) {
-//	//if (hi->data.i >= min_count) continue;
-//	HashItem *hi_n = HashTableSearch(neighbours, hi->key,  errk);
-//	printf("%.*s %d -> %.*s\n", errk, hi->key, (int)hi->data.i,
-//	       errk, hi_n ? (char *)hi_n->data.p : 0);
-//	if (!hi_n) continue;
-//    }
-
     HashTableIterDestroy(hiter);
-
 
     // Auto-correct rare words
     int nc = 0;
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
 	uint8_t *qual = h[i].qual;
-	char *s2 = strdup(seq);
+	char *s2 = seq;
 	int len = strlen(seq), j;
 #define EDGE_DIST 3
 	for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {
@@ -3413,6 +3464,11 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    if (qual && min_qual && qual[k] >= min_qual)
 		continue;
 
+	    if (s2 == seq) {
+		old_seq[i] = seq;
+		s2 = strdup(seq);
+	    }
+
 	    s2[j+k] = ((char *)hi2->data.p)[k];
 //#ifndef NO_QUAL_FIX
 //	    qual[j+k] /= 4; // if we corrected it, also mark as low qual!
@@ -3420,17 +3476,143 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    nc++;
 	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
 	}
-	free(seq);
 	h[i].seq = s2;
     }
     fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth);
 
+    for (i = 0; i < n; i++)
+	if (old_seq[i])
+	    free(old_seq[i]);
 
-//    HashTableDestroy(hash, 0);
-//    HashTableDestroy(neighbours, 0);
+    string_pool_destroy(sp);
+    HashTableDestroy(hash, 0);
+    HashTableDestroy(neighbours, 0);
 
     return nc;
 }
+
+#define CORRECT_ERRORS_N(N) \
+    int correct_errors##N(haps_t *h, int n, int min_count, int min_qual) { \
+	HashItem *hi;							\
+	int i, counth = 0, countw = 0;					\
+	khiter_t k;							\
+	const int errk = N;						\
+	string_alloc_t *sp = string_pool_create(errk*10000);		\
+									\
+	ec_hash##N##_t  *hash       = kh_init(ec_hash##N);		\
+	ec_neigh##N##_t *neighbours = kh_init(ec_neigh##N);		\
+	char **old_seq;							\
+									\
+	/*  Keep copy of sequences, so updating doesn't invalidate the hash table. */ \
+	old_seq = calloc(n, sizeof(char *));				\
+	if (!old_seq)							\
+	    return -1;							\
+									\
+	/* Hash words in all our sequences; hash[kmer] => count(int) */	\
+	for (i = 0; i < n; i++) {					\
+	    char *seq = h[i].seq;					\
+	    int len = strlen(seq), j;					\
+	    for (j = 0; j < len-errk; j++) {				\
+		int nw;							\
+		k = kh_put(ec_hash##N, hash, seq+j, &nw);		\
+		kh_val(hash, k) = nw ? 1 : kh_val(hash, k)+1;		\
+									\
+		counth++;						\
+		countw+=(nw > 0);					\
+	    }								\
+	}								\
+									\
+	int avg = 2*ceil((double)countw / counth);			\
+	fprintf(stderr, "%d unique words, %d total words\n", countw, counth); \
+									\
+	/* Find common words and produce neighbourhoods */		\
+	for (k = kh_begin(hash); k != kh_end(hash); k++) {		\
+	    if (!kh_exist(hash, k))					\
+		continue;						\
+									\
+	    if (kh_val(hash, k) >= avg) {				\
+		int j;							\
+		for (j = 0; j < errk; j++) {				\
+		    int nw, b;						\
+									\
+		    int base = kh_key(hash, k)[j];			\
+		    for (b = 0; b < 4; b++) {				\
+			if ("ACGT"[b] == base) continue;		\
+			char *n = string_alloc(sp, errk);		\
+			memcpy(n, kh_key(hash, k), errk);		\
+			n[j] = "ACGT"[b];				\
+									\
+			khint_t nk = kh_put(ec_neigh##N, neighbours, n, &nw); \
+			kh_val(neighbours, nk) = nw ? kh_key(hash, k) : NULL; \
+		    }							\
+		}							\
+	    }								\
+	}								\
+									\
+	/* Auto-correct rare words */					\
+	int nc = 0;							\
+	for (i = 0; i < n; i++) {					\
+	    char *seq = h[i].seq;					\
+	    uint8_t *qual = h[i].qual;					\
+	    char *s2 = seq;						\
+	    int len = strlen(seq), j;					\
+	    for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {		\
+		HashItem *hi, *hi2;					\
+									\
+		khint_t k = kh_get(ec_hash##N, hash, seq+j);		\
+		if (k == kh_end(hash) || kh_val(hash, k) >= min_count)	\
+		    continue;						\
+									\
+		k = kh_get(ec_neigh##N, neighbours, seq+j);		\
+		if (k == kh_end(neighbours) || !kh_val(neighbours, k))	\
+		    continue;						\
+									\
+		/* Does seq query and hash key match? If not, correct */ \
+		int l;							\
+		for (l = 0; l < errk; l++)				\
+		    if (s2[j+l] != kh_val(neighbours, k)[l])		\
+			break;						\
+		if (l == errk)						\
+		    continue;						\
+									\
+		if (qual && min_qual && qual[l] >= min_qual)		\
+		    continue;						\
+									\
+		if (s2 == seq) {					\
+		    old_seq[i] = seq;					\
+		    s2 = strdup(seq);					\
+		}							\
+		s2[j+l] = kh_val(neighbours, k)[l];			\
+		nc++;							\
+	    }								\
+	    h[i].seq = s2;						\
+	}								\
+	fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth); \
+									\
+	for (i = 0; i < n; i++)						\
+	    if (old_seq[i])						\
+		free(old_seq[i]);					\
+									\
+	/* Free old seqs */						\
+	string_pool_destroy(sp);					\
+	kh_destroy(ec_hash##N, hash);					\
+	kh_destroy(ec_neigh##N, neighbours);				\
+									\
+	return nc;							\
+    }
+
+#define ERROR_CORRECTION(N)			    \
+    KHASH_KMER_INIT(N)				    \
+    KHASH_MAP_INIT_KMER_N(ec_hash, int, N)	    \
+    typedef khash_t(ec_hash##N) ec_hash##N##_t;	    \
+    KHASH_MAP_INIT_KMER_N(ec_neigh, char*, N)       \
+    typedef khash_t(ec_neigh##N) ec_neigh##N##_t;   \
+    CORRECT_ERRORS_N(N)
+
+ERROR_CORRECTION(27)
+ERROR_CORRECTION(25)
+ERROR_CORRECTION(20)
+ERROR_CORRECTION(14)
 
 static unsigned char complementary_base[256] = {
     0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,
@@ -4122,10 +4304,13 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 //    for (i = 0; i < 3; i++)
 //	correct_errors(haps, nhaps, ERRK, 3);
 
+//#define correct_errors(h,n,k,m,q) correct_errors##k(h,n,m,q)
+
     correct_errors(haps, nhaps, 27, 3, 0);
-    correct_errors(haps, nhaps, 25, 1, 0);
-    correct_errors(haps, nhaps, 20, 1, 0);
-    correct_errors(haps, nhaps, 14, 1, 0);
+    correct_errors(haps, nhaps, 25, 2, 0);
+    correct_errors(haps, nhaps, 20, 2, 0);
+    correct_errors(haps, nhaps, 14, 2, 0);
+
 //    for (i = 0; i < 10; i++)
 //	if (correct_errors(haps, nhaps, 14, 2, 5) <= 0)
 //	    break;
