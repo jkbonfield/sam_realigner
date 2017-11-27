@@ -70,6 +70,9 @@ appropriate location within the string.
 #define GOPEN 8
 #define GEXT  4
 
+// Use most frequent 90% of words for error correcting.
+#define CORRECT_PERC 0.1
+
 //-----------------------------------------------------------------------------
 // Khash interface to kmer indexing, with variable sized kmer.
 //
@@ -3398,13 +3401,31 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    hi->data.i++;
 	    counth++;
 	    countw+=nw;
+
+	    // FIXME: sum by quality too, so HQ words are more important
+	    // than LQ ones?
 	}
     }
 
-    fprintf(stderr, "%d unique words, %d total words\n", countw, counth);
+    int avg = 0;
+    {
+	// discard 10% of words and error correct those to remaining 90%
+	int F[100] = {0}, n = 0, t = 0, tlim = CORRECT_PERC * counth;
+	HashIter *hiter = HashTableIterCreate();
+	while ((hi = HashTableIterNext(hash, hiter)))
+	    F[hi->data.i > 99 ? 99 : hi->data.i]++;
+
+	for (i = 1; i < 100; i++) {
+	    //fprintf(stderr, "CALL %d count %d tot %d / %d\n", i, F[i], t, counth);
+	    if (t >= tlim)
+		break;
+	    t += i*F[i];
+	}
+	avg = i;
+    }
 
     // Find common words and produce neighbourhoods
-    int avg = 2*ceil((double)countw / counth); // FIXME: improve this
+    fprintf(stderr, "%d unique words, %d total words, threshold %d\n", countw, counth, avg);
     neighbours = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
 
     HashIter *hiter = HashTableIterCreate();
@@ -3522,7 +3543,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    }								\
 	}								\
 									\
-	int avg = 2*ceil((double)countw / counth);			\
+	int avg = 2*ceil((double)counth / countw);			\
 	fprintf(stderr, "%d unique words, %d total words\n", countw, counth); \
 									\
 	/* Find common words and produce neighbourhoods */		\
