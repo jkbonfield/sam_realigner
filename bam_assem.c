@@ -70,8 +70,20 @@ appropriate location within the string.
 #define GOPEN 8
 #define GEXT  4
 
-// Use most frequent 90% of words for error correcting.
-#define CORRECT_PERC 0.1
+// Use most frequent 95% of words for error correcting.
+#define CORRECT_PERC 0.05
+
+// But only if their combined confidence is high enough
+#define CORRECT_MIN_CONF 15
+
+// And only when the confidence of the new kmer is MULT times
+// larger than the confidence of the old kmer.
+//#define CORRECT_MULT 1
+
+// Appropriate when summing kmer-qual over all matching kmers.
+// #define CORRECT_MIN_CONF 30
+// #define CORRECT_MULT 5
+
 
 //-----------------------------------------------------------------------------
 // Khash interface to kmer indexing, with variable sized kmer.
@@ -3387,23 +3399,44 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
     kmer_hash = hash;
 
+    double perr[256];
+    for (i = 0; i < 256; i++)
+	perr[i] = pow(10, i/-10.0);
+
     // Hash words
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
-	int len = strlen(seq), j;
+	uint8_t *qual = h[i].qual;
+	int len = strlen(seq), j, k;
+	double mq = 0;
+	for (j = 0; j < errk-1; j++)
+	    mq += perr[qual[j]];
+
 	for (j = 0; j < len-errk; j++) {
 	    HashData hd;
 	    HashItem *hi;
 	    int nw;
 
-	    hd.i = 0;
+	    // Phredish likelihood for expected number of errors.
+	    mq += perr[qual[j+errk-1]];
+	    int pq = -4.342945*log(mq);
+	    mq -= perr[qual[j]];
+	    hd.x[0] = 0; hd.x[1] = 0;
+
+	    // pq can be negative if expectation is more than 1 err.
+	    pq = pq<0 ?0 :pq;
+
 	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
-	    hi->data.i++;
+	    hi->data.x[0]++;
+
+	    // Store aggregate qual for all instances of kmer.
+	    // hi->data.x[1] += pq;
+
+	    // Store maximum qual for kmer
+	    if (hi->data.x[1] < pq)
+		hi->data.x[1] = pq;
 	    counth++;
 	    countw+=nw;
-
-	    // FIXME: sum by quality too, so HQ words are more important
-	    // than LQ ones?
 	}
     }
 
@@ -3413,7 +3446,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	int F[100] = {0}, n = 0, t = 0, tlim = CORRECT_PERC * counth;
 	HashIter *hiter = HashTableIterCreate();
 	while ((hi = HashTableIterNext(hash, hiter)))
-	    F[hi->data.i > 99 ? 99 : hi->data.i]++;
+	    F[hi->data.x[0] > 99 ? 99 : hi->data.x[0]]++;
 
 	for (i = 1; i < 100; i++) {
 	    //fprintf(stderr, "CALL %d count %d tot %d / %d\n", i, F[i], t, counth);
@@ -3423,6 +3456,8 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	}
 	avg = i;
     }
+    if (avg < min_count)
+	avg = min_count;
 
     // Find common words and produce neighbourhoods
     fprintf(stderr, "%d unique words, %d total words, threshold %d\n", countw, counth, avg);
@@ -3430,8 +3465,13 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 
     HashIter *hiter = HashTableIterCreate();
     while ((hi = HashTableIterNext(hash, hiter))) {
-	if (hi->data.i >= avg) {
-	    //fprintf(stderr, "%.*s %d\n", errk, hi->key, hi->data.i);
+	//fprintf(stderr, "%.*s %d %d\n", errk, hi->key, hi->data.x[0], hi->data.x[1]);
+
+	// Also try hi->data.x[1]+hi->data.x[0] >= CORRECT_MIN_CONF to help boost
+	// deep sequences?  Or is this just covered in average?
+	// In that case "x[0] >= avg || x[1] >= MIN_CONF" may be better...
+	//if (hi->data.x[0] >= avg && hi->data.x[0] + hi->data.x[1] >= CORRECT_MIN_CONF) {
+	if (hi->data.x[0] >= avg && hi->data.x[1] >= CORRECT_MIN_CONF) {
 	    int j;
 	    for (j = 0; j < errk; j++) {
 		int nw, k;
@@ -3455,6 +3495,9 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     // Auto-correct rare words
     int nc = 0;
     for (i = 0; i < n; i++) {
+//	int corrected, loops_left=1;
+//	do {
+//	    corrected = 0;
 	char *seq = h[i].seq;
 	uint8_t *qual = h[i].qual;
 	char *s2 = seq;
@@ -3463,17 +3506,19 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {
 	    HashItem *hi, *hi2;
 
+	    // Ditch common words
 	    hi = HashTableSearch(hash, seq+j, errk);
-	    if (!hi || hi->data.i >= min_count)
+	    if (hi && hi->data.x[0] >= min_count) {
+		// Ideally we'd skip along kmer at a time, or at least kmer/2.
+		// However in practice this seems to harm things considerably.
 		continue;
+	    }
 
-	    hi2 = HashTableSearch(neighbours, hi->key, errk);
+	    hi2 = HashTableSearch(neighbours, seq+j, errk);
 	    if (!hi2 || !hi2->data.p) {
 		//fprintf(stderr, "No correction for %.*s %d\n", errk, hi->key, hi->data.i);
 		continue;
 	    }
-
-	    //memcpy(s2+j, hi2->data.p, errk);
 
 	    int k;
 	    for (k = 0; k < errk; k++)
@@ -3482,22 +3527,38 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    if (k == errk)
 		continue;
 
-	    if (qual && min_qual && qual[k] >= min_qual)
+	    if (qual && min_qual && qual[j+k] >= min_qual)
 		continue;
 
-	    if (s2 == seq) {
-		old_seq[i] = seq;
-		s2 = strdup(seq);
-	    }
+	    // // Don't correct marginal kmers to slightly less marginal kmers.
+	    // HashItem *hi3 = HashTableSearch(hash, hi2->data.p, errk);
+	    // if (hi && hi3 && hi3->data.x[1] < CORRECT_MULT*hi->data.x[1]) continue;
 
+	    //fprintf(stderr, "Correct from qual %d to qual %d\n", hi->data.x[1], hi3->data.x[1]);
+
+	    if (s2 == seq)
+		s2 = strdup(seq);
+
+	    assert(s2[j+k] != ((char *)hi2->data.p)[k]);
 	    s2[j+k] = ((char *)hi2->data.p)[k];
 //#ifndef NO_QUAL_FIX
 //	    qual[j+k] /= 4; // if we corrected it, also mark as low qual!
 //#endif
 	    nc++;
 	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
+
+	    j += k/2; // two bites at the cherry
+	    //corrected = 1;
 	}
-	h[i].seq = s2;
+	if (seq != s2) {
+	    if (old_seq[i])
+		free(seq);
+	    else
+		old_seq[i] = seq;
+	    h[i].seq = s2;
+	}
+//
+//	} while (corrected && loops_left--);
     }
     fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth);
 

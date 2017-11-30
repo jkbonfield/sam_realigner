@@ -1,4 +1,4 @@
-ALL=assem_bam_k3 assem_bam_k4 assem_bam_k13 assem_bam_k18 bam_realign
+ALL=bam_realign assem_bam_k3 assem_bam_k4 assem_bam_k13 assem_bam_k18
 
 CC=cc
 CFLAGS=-g
