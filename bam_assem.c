@@ -71,10 +71,10 @@ appropriate location within the string.
 #define GEXT  4
 
 // Use most frequent 95% of words for error correcting.
-#define CORRECT_PERC 0.05
+#define CORRECT_PERC 0.1
 
-// But only if their combined confidence is high enough
-#define CORRECT_MIN_CONF 15
+// // But only if their combined confidence is high enough
+// #define CORRECT_MIN_CONF 15
 
 // And only when the confidence of the new kmer is MULT times
 // larger than the confidence of the old kmer.
@@ -3417,6 +3417,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    HashItem *hi;
 	    int nw;
 
+#ifdef CORRECT_MIN_CONF
 	    // Phredish likelihood for expected number of errors.
 	    mq += perr[qual[j+errk-1]];
 	    int pq = -4.342945*log(mq);
@@ -3435,6 +3436,12 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    // Store maximum qual for kmer
 	    if (hi->data.x[1] < pq)
 		hi->data.x[1] = pq;
+#else
+	    // Phredish likelihood for expected number of errors.
+	    hd.x[0] = 0;
+	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
+	    hi->data.x[0]++;
+#endif
 	    counth++;
 	    countw+=nw;
 	}
@@ -3467,11 +3474,16 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     while ((hi = HashTableIterNext(hash, hiter))) {
 	//fprintf(stderr, "%.*s %d %d\n", errk, hi->key, hi->data.x[0], hi->data.x[1]);
 
+#ifdef CORRECT_MIN_CONF
 	// Also try hi->data.x[1]+hi->data.x[0] >= CORRECT_MIN_CONF to help boost
 	// deep sequences?  Or is this just covered in average?
 	// In that case "x[0] >= avg || x[1] >= MIN_CONF" may be better...
 	//if (hi->data.x[0] >= avg && hi->data.x[0] + hi->data.x[1] >= CORRECT_MIN_CONF) {
-	if (hi->data.x[0] >= avg && hi->data.x[1] >= CORRECT_MIN_CONF) {
+	if (hi->data.x[0] >= avg && hi->data.x[1] >= CORRECT_MIN_CONF)
+#else
+        if (hi->data.x[0] >= avg)
+#endif
+	{
 	    int j;
 	    for (j = 0; j < errk; j++) {
 		int nw, k;
@@ -3530,11 +3542,13 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	    if (qual && min_qual && qual[j+k] >= min_qual)
 		continue;
 
+#ifdef CORRECT_MIN_CONF
 	    // // Don't correct marginal kmers to slightly less marginal kmers.
 	    // HashItem *hi3 = HashTableSearch(hash, hi2->data.p, errk);
 	    // if (hi && hi3 && hi3->data.x[1] < CORRECT_MULT*hi->data.x[1]) continue;
 
 	    //fprintf(stderr, "Correct from qual %d to qual %d\n", hi->data.x[1], hi3->data.x[1]);
+#endif
 
 	    if (s2 == seq)
 		s2 = strdup(seq);
@@ -4392,6 +4406,12 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     correct_errors(haps, nhaps, 25, 2, 0);
     correct_errors(haps, nhaps, 20, 2, 0);
     correct_errors(haps, nhaps, 14, 2, 0);
+
+    // tried:
+    // 27, 25, 20, 14 (good; 82B cycles)
+    // 25, 20, 14     (?  think close to top one. RECHECK parse error...)
+    // 25, 20         (lots of unmapped / unaligned, but ok result)
+    // 25, 14         (66B cycle; many unmapped / unaligned, but ...)
 
 //    for (i = 0; i < 10; i++)
 //	if (correct_errors(haps, nhaps, 14, 2, 5) <= 0)
