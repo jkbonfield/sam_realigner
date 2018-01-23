@@ -191,7 +191,7 @@ void init_X128_score(int mis, int mat) {
     X128['C']['D'] = X128['D']['C'] = mis/2;
     X128['G']['H'] = X128['H']['G'] = mis/2;
     X128['T']['V'] = X128['V']['T'] = mis/2;
-    
+
     // Ambiguity vs pads.
     // All to start with, to set mismatch (A vs G*) baseline.
     for (i = 0; i < 11; i++) {
@@ -540,7 +540,7 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
 //	node->seq = NULL;
 //	node->len = 0;
     }
-    
+
     // Debugging
     node->id = g->nnodes++;
 
@@ -784,7 +784,7 @@ int loop_check(dgraph_t *g, int loop_break) {
 		node_t *last = g->node[last_node];
 		node_t *to = g->node[last->out[last_edge]->n[1]];
 		fprintf(stderr, "last_node=%d -> %d\n", last_node, to->id);
-		memmove(&last->out[last_edge], &last->out[last_edge+1], 
+		memmove(&last->out[last_edge], &last->out[last_edge+1],
 			(last->n_out - last_edge) * sizeof(*last->out));
 		last->n_out--;
 		int z,k;
@@ -878,7 +878,7 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 //	    if (ref & IS_REF)
 //		n1->pos = i;
 	    n1->ref |= ref;
-	    
+
 	    //n2->pos = i+g->kmer;
 //	    if (ref & IS_REF)
 //		n2->pos = i+1;
@@ -1019,7 +1019,7 @@ void prune_heads(dgraph_t *g, int min_count) {
 	}
     } while (done_something);
 }
- 
+
 static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node_t *n_end,
 				       int start, int (*vn)[5], node_t **path1, int np1, node_t **path2, int np2,
 				       int *p, int *x1, int *x2, node_t **l1, node_t **l2) {
@@ -1269,7 +1269,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
 	free(path2);
 	return -1;
     }
-    
+
 
 //    // Report
 //    n = p1;
@@ -1623,7 +1623,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 			//printf("Skipping ref edge %d to %d\n", n->id, n->out[i]->n[1]);
 			continue;
 		    }
-		    
+
 		    if (g->node[n->out[i]->n[1]]->count < min_depth)
 			continue; // skip pointless paths
 
@@ -1655,7 +1655,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 	for (lp = NULL, p = head; p; lp = p, p = pnext) {
 	    pnext = p->next;
 	    node_t *n = p->n, *pn = p->pn;
-	    
+
 	    if (!n) continue;
 
 	    if (n->visited) {
@@ -1719,7 +1719,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 		n->in[0] = n->in[i];
 		n->in[i] = tmp;
 	    }
-	    
+
 	    n->visited = p->id;
 	    vis[(*nvis)++]=n->id;
 //	    printf("B: Node %d visisted by %d\n", n->id, p->id);
@@ -1870,7 +1870,7 @@ int tag_tail_from(dgraph_t *g, int parent, int id) {
 	    printf("%d->%d: possible tail\n", n->id, n->out[i]->n[1]);
 	}
     }
-    
+
     if (t)
 	n->is_tail = 1;
     printf("%s at %d\n", t ? "tail" : "non-tail", n->id);
@@ -1919,14 +1919,14 @@ void tag_hairs(dgraph_t *g) {
 	if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
 	    tag_head_from(g, -1, 1, i);
 	}
-    }    
+    }
 
     for (i = 0; i < g->nnodes; i++) {
 	if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
 	    printf("Hair start at %d\n", i);
 	    tag_tail_from(g, -1, i);
 	}
-    }    
+    }
 }
 
 
@@ -2006,7 +2006,7 @@ int ins_head_node(dgraph_t *g, node_t *n1, node_t *n2, node_t *c) {
 
     // Move out edge c->n2 to n1->n2
     move_edge_out(g, n2, c, n1);
-    
+
     // The above doesn't move the incoming edge linking
     // n2->c, so we do that manually.
     for (i = j = 0; i < c->n_in; i++) {
@@ -2270,7 +2270,7 @@ void validate_graph(dgraph_t *g) {
     }
 }
 
-#if 0
+#if 1
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     return 0;
 }
@@ -2578,9 +2578,9 @@ typedef struct hseq {
 //     int i = 0, j = 0;
 //     char *B = h->seq2, *A = ref->seq;
 //     int N = h->len, M = strlen(ref->seq);
-// 
+//
 //     int *pos = calloc(N + g->kmer, sizeof(int));
-// 
+//
 //     // Pos is hooked to last base in KMER.
 //     while (i < M || j < N) {
 // 	int op = *S++;
@@ -2766,7 +2766,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 //		pos = np->pos-1;
 //		ADD_CIGAR(...
 //	    }
-//	    
+//
 //	} else {
 	    pos = n->pos-1;
 //	}
@@ -2893,7 +2893,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		// bubble up to check if D or P before I
 		if (n->ins > last_ins+1)
 		    ADD_CIGAR(BAM_CPAD, n->ins - (last_ins+1));
-	    
+
 		ADD_CIGAR(BAM_CINS, 1);
 		last_ins = n->ins;
 		// FIXME: mismatches at the end need to be soft-clips and
@@ -3379,6 +3379,238 @@ hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hs
     return h;
 }
 
+#if 0
+// FIXME: min_count needs to be depth based.  Find mean count and
+// use this to cap min_count?  So low coverage would reduce,
+// min_count, but high coverage or lots of low complexity data won't
+// increase it.
+int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
+    HashTable *kmer_hash = NULL, *neighbours = NULL;
+    HashItem *hi;
+    int i, counth = 0, countw = 0;
+    string_alloc_t *sp = string_pool_create(errk*10000);
+
+    /*  Keep copy of sequences, so updating doesn't invalidate the hash table. */
+    char **old_seq = calloc(n, sizeof(char *));
+    if (!old_seq)
+	return -1;
+
+    HashTable *hash = kmer_hash;
+
+    hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
+    kmer_hash = hash;
+
+    double perr[256];
+    for (i = 0; i < 256; i++)
+	perr[i] = pow(10, i/-10.0);
+
+    // Hash words
+    for (i = 0; i < n; i++) {
+	char *seq = h[i].seq;
+	uint8_t *qual = h[i].qual;
+	int len = strlen(seq), j, k;
+	double mq = 0;
+	for (j = 0; j < errk-1; j++)
+	    mq += perr[qual[j]];
+
+	for (j = 0; j < len-errk; j++) {
+	    HashData hd;
+	    HashItem *hi;
+	    int nw;
+
+#ifdef CORRECT_MIN_CONF
+	    // Phredish likelihood for expected number of errors.
+	    mq += perr[qual[j+errk-1]];
+	    int pq = -4.342945*log(mq);
+	    mq -= perr[qual[j]];
+	    hd.x[0] = 0; hd.x[1] = 0;
+
+	    // pq can be negative if expectation is more than 1 err.
+	    pq = pq<0 ?0 :pq;
+
+	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
+	    hi->data.x[0]++;
+
+	    // Store aggregate qual for all instances of kmer.
+	    // hi->data.x[1] += pq;
+
+	    // Store maximum qual for kmer
+	    if (hi->data.x[1] < pq)
+		hi->data.x[1] = pq;
+#else
+	    // Phredish likelihood for expected number of errors.
+	    hd.x[0] = 0;
+	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
+	    hi->data.x[0]++;
+#endif
+	    counth++;
+	    countw+=nw;
+	}
+    }
+
+    int avg = 0;
+    {
+	// discard 10% of words and error correct those to remaining 90%
+	int F[100] = {0}, n = 0, t = 0, tlim = CORRECT_PERC * counth;
+	HashIter *hiter = HashTableIterCreate();
+	while ((hi = HashTableIterNext(hash, hiter)))
+	    F[hi->data.x[0] > 99 ? 99 : hi->data.x[0]]++;
+
+	for (i = 1; i < 100; i++) {
+	    //fprintf(stderr, "CALL %d count %d tot %d / %d\n", i, F[i], t, counth);
+	    if (t >= tlim)
+		break;
+	    t += i*F[i];
+	}
+	avg = i;
+    }
+    if (avg < min_count)
+	avg = min_count;
+
+    // Find common words and produce neighbourhoods
+    fprintf(stderr, "%d unique words, %d total words, threshold %d\n", countw, counth, avg);
+    neighbours = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
+
+    HashIter *hiter = HashTableIterCreate();
+    while ((hi = HashTableIterNext(hash, hiter))) {
+	//fprintf(stderr, "%.*s %d %d\n", errk, hi->key, hi->data.x[0], hi->data.x[1]);
+
+#ifdef CORRECT_MIN_CONF
+	// Also try hi->data.x[1]+hi->data.x[0] >= CORRECT_MIN_CONF to help boost
+	// deep sequences?  Or is this just covered in average?
+	// In that case "x[0] >= avg || x[1] >= MIN_CONF" may be better...
+	//if (hi->data.x[0] >= avg && hi->data.x[0] + hi->data.x[1] >= CORRECT_MIN_CONF) {
+	if (hi->data.x[0] >= avg && hi->data.x[1] >= CORRECT_MIN_CONF)
+#else
+        if (hi->data.x[0] >= avg)
+#endif
+	{
+	    int j;
+	    for (j = 0; j < errk; j++) {
+		//for (j = 0; j < errk; j += 8) {
+		int nw, k;
+		HashData hd;
+		hd.p = hi->key;
+		int base = hi->key[j];
+		for (k = 0; k < 4; k++) {
+		    HashItem *hi2;
+		    if ("ACGT"[k] == base) continue;
+		    char *N = string_alloc(sp, errk);
+		    memcpy(N, hi->key, errk);
+		    N[j] = "ACGT"[k];
+		    hi2 = HashTableAdd(neighbours, N, errk, hd, &nw);
+		    if (!nw) hi2->data.p = NULL; // mark the clash
+		}
+	    }
+	}
+    }
+    HashTableIterDestroy(hiter);
+
+    int nc = 0;
+
+    // Consider building neighbour at single point (so 4 neighbours per kmer rather than 4xkmer)
+    // and comparing all words vs neighbour.
+    // Instead we compare every kmer/2 words vs all neighbours.
+
+
+    // Auto-correct rare words
+    for (i = 0; i < n; i++) {
+	int P; for (P = 0; P < 1; P++) { // LOOP
+	char *seq = h[i].seq;
+	uint8_t *qual = h[i].qual;
+	char *s2 = seq, *seq_ = seq;
+	int len = strlen(seq), j;
+
+	// Multiple passes here so we can rapidly fix more than 1 single error without
+	// having to hash a new neighbourhood several times over.
+	int max_passes = 2;
+	int pass = 0;
+	int corrected;
+
+    another_pass:
+	corrected = 0;
+
+#define EDGE_DIST 3
+	for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {
+	    HashItem *hi, *hi2;
+
+	    // Note using s2 here instead of seq means we can correct multi-base
+	    // errors 1 base at a time, provided they fit the < min_count criteria.
+
+	    // Ditch common words
+	    hi = HashTableSearch(hash, s2+j, errk);
+	    if (hi && hi->data.x[0] >= min_count) {
+		// Ideally we'd skip along kmer at a time, or at least kmer/2.
+		// However in practice this seems to harm things considerably.
+		continue;
+	    }
+
+	    hi2 = HashTableSearch(neighbours, s2+j, errk);
+	    if (!hi2 || !hi2->data.p) {
+		//fprintf(stderr, "No correction for %.*s %d\n", errk, hi->key, hi->data.i);
+		continue;
+	    }
+
+	    int k;
+	    for (k = 0; k < errk; k++)
+		if (s2[j+k] != ((char *)hi2->data.p)[k])
+		    break;
+	    if (k == errk)
+		continue;
+
+	    if (qual && min_qual && qual[j+k] >= min_qual)
+		continue;
+
+#ifdef CORRECT_MIN_CONF
+	    // // Don't correct marginal kmers to slightly less marginal kmers.
+	    // HashItem *hi3 = HashTableSearch(hash, hi2->data.p, errk);
+	    // if (hi && hi3 && hi3->data.x[1] < CORRECT_MULT*hi->data.x[1]) continue;
+
+	    //fprintf(stderr, "Correct from qual %d to qual %d\n", hi->data.x[1], hi3->data.x[1]);
+#endif
+
+	    if (s2 == seq)
+		s2 = strdup(seq);
+
+	    assert(s2[j+k] != ((char *)hi2->data.p)[k]);
+	    s2[j+k] = ((char *)hi2->data.p)[k];
+//#ifndef NO_QUAL_FIX
+//	    qual[j+k] /= 4; // if we corrected it, also mark as low qual!
+//#endif
+	    nc++;
+	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
+
+	    j += k/2; // two bites at the cherry
+	    corrected = 1;
+	}
+
+	seq_ = s2;
+	if (corrected && ++pass < max_passes)
+	    goto another_pass;
+
+	if (seq != s2) {
+	    if (old_seq[i])
+		free(seq);
+	    else
+		old_seq[i] = seq;
+	    h[i].seq = s2;
+	}
+	}
+    }
+    fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth);
+
+    for (i = 0; i < n; i++)
+	if (old_seq[i])
+	    free(old_seq[i]);
+
+    string_pool_destroy(sp);
+    HashTableDestroy(hash, 0);
+    HashTableDestroy(neighbours, 0);
+
+    return nc;
+}
+#endif
+
 // FIXME: min_count needs to be depth based.  Find mean count and
 // use this to cap min_count?  So low coverage would reduce,
 // min_count, but high coverage or lots of low complexity data won't
@@ -3579,6 +3811,251 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     for (i = 0; i < n; i++)
 	if (old_seq[i])
 	    free(old_seq[i]);
+
+    string_pool_destroy(sp);
+    HashTableDestroy(hash, 0);
+    HashTableDestroy(neighbours, 0);
+
+    return nc;
+}
+
+
+//-----------------------------------------------------------------------------
+// Error correction via kmer hashing.
+//
+// The basic algorithm is:
+//
+// 0. Split sequence into a series of overlapping kmers.
+// 1. Count kmers
+// 2. Observe kmer frequency distribution to find a typical depth
+//    for correct sequence.
+// 3. Assume very rare kmers correspond to sequencing errors, vs frequent
+//    ones which are good.  (NB: VERY frequent means repetitive sequence)
+// 4. Produce a mapping of all single base edits from "good" kmers
+//    (kmer neighberhood) and link them to their original kmer.
+//    NB: neighbours can clash. If so exclude from neighbour mapping.
+// 5. Loop through all kmers in sequences, and if bad (rare) and matching
+//    a neighbour of a good kmer, then correct it.
+//
+// Note errk may be anything from 8 (array) to 30 (needs sparse
+// array / hashing).  Hence we use hash tables here.
+int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
+    HashTable *kmer_hash = NULL, *neighbours = NULL;
+    HashItem *hi;
+    int i, counth = 0, countw = 0, tbases = 0;
+    string_alloc_t *sp = string_pool_create(errk*10000);
+
+    char **new_seq = calloc(n, sizeof(char *));
+    if (!new_seq)
+	return -1;
+
+    HashTable *hash = kmer_hash;
+
+    hash = HashTableCreate(8192, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS |
+			   HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
+    kmer_hash = hash;
+
+    //-----------
+    // Hash words
+    for (i = 0; i < n; i++) {
+	char *seq = h[i].seq;
+	int len = strlen(seq), j;
+
+	tbases += len;
+	for (j = 0; j < len-errk; j++) {
+	    HashData hd;
+	    HashItem *hi;
+	    int nw;
+
+	    hd.i = 0;
+	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
+	    hi->data.i++;
+
+	    counth++;
+	    countw+=nw;
+	}
+    }
+    
+    //-----------
+    // Compute kmer depth threshhold that corresponds to correcting ~90%
+    // of the data set, and assume these represent correct kmers.
+    int thresh = 0, count_good = 0;
+    {
+	// Discard 10% of words and error correct those to remaining 90%
+	int F[256] = {0};
+	HashIter *hiter = HashTableIterCreate();
+	while ((hi = HashTableIterNext(hash, hiter))) {
+	    //fprintf(stderr, "KMER %.*s freq %d\n", errk, hi->key, hi->data.i);
+	    F[hi->data.i > 255 ? 255 : hi->data.i]++;
+	}
+
+	// Compute mean of values > 2 and s.d.
+	int cnt = 0, sum = 0, sum_sq = 0;
+	for (i = 3; i < 256; i++) {
+	    if (!F[i])
+		continue;
+	    //fprintf(stderr, "Dist[%d]=%d\n", i, F[i]);
+	    cnt += F[i];
+	    sum += i*F[i];
+	    sum_sq += i*i*F[i];
+	    if (F[i] >= min_count)
+		count_good += F[i]; // approximation
+	}
+	double mean = (double)sum/cnt;
+	double sd = sqrt(sum_sq/cnt - mean*mean);
+	fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
+		(int)(mean-sd*2), (int)(mean+sd*2+.999));
+
+	thresh = mean-sd*2 > 3 ? mean-sd*2 : 3;
+	if (thresh > 3) {
+	    // 2nd pass on the bulk of the data
+	    int i_end = mean+sd*2+.999;
+	    cnt = sum = sum_sq = 0;
+	    for (i = thresh; i < i_end; i++) {
+		if (!F[i])
+		    continue;
+		cnt += F[i];
+		sum += i*F[i];
+		sum_sq += i*i*F[i];
+	    }
+	    mean = (double)sum/cnt;
+	    sd = sqrt(sum_sq/cnt - mean*mean);
+
+	    fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
+		    (int)(mean-sd*2), (int)(mean+sd*2+.999));
+	}
+
+	thresh = mean-sd*2 > min_count ? mean-sd*2 : min_count;
+    }
+
+
+    //-----------
+    // Find common words and produce neighbourhoods
+    //
+    // The slow bit...
+    // Consider building neighbour at single point (so 4 neighbours per kmer
+    // rather than 4 x kmer) and comparing all words vs neighbour.  Sliding
+    // all seq kmers against this ought to work, but in practice does not.
+    //
+    // Instead we build the complete neighbourhood and compare every
+    // kmer/2 within sequence vs all neighbours.
+
+    fprintf(stderr, "%d unique words, %d est. good, %d total words, threshold %d\n",
+	    countw, count_good, counth, thresh);
+    neighbours = HashTableCreate(count_good*16, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS |
+				 HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
+
+    int nn = 0, cg = 0;
+    HashIter *hiter = HashTableIterCreate();
+    while ((hi = HashTableIterNext(hash, hiter))) {
+        if (hi->data.i >= thresh) {
+	    int j;
+	    //for (j = 0; j < errk; j++) {
+	    for (j = 0; j < errk; j += errk-1) { // 1st and last base only
+		int nw, k;
+		HashData hd;
+		hd.p = hi->key;
+		int base = hi->key[j];
+		for (k = 0; k < 5; k++) {
+		    HashItem *hi2;
+		    if ("ACGTN"[k] == base) continue;
+		    char *N = string_alloc(sp, errk);
+		    memcpy(N, hi->key, errk);
+		    N[j] = "ACGTN"[k];
+		    hi2 = HashTableAdd(neighbours, N, errk, hd, &nw);
+		    //fprintf(stderr, "Add neighbour %.*s -> %.*s: had=%d\n", errk, (char *)N, errk, (char *)hi->key, !nw);
+		    if (!nw) {
+			// This deletion step works better if we have full neighbour
+			// analysis via j++ loop above, instead of j += errk-1.
+			//
+			//fprintf(stderr, "Del neighbour %.*s\n", errk, (char *)N);
+			hi2->data.p = NULL; // mark the clash
+		    }
+		    nn++;
+		}
+	    }
+	}
+    }
+    HashTableIterDestroy(hiter);
+    //fprintf(stderr, "%d neighbours hashed, est. %d\n", nn, count_good*8);
+
+
+    //-----------
+    // Now scan through all kmers in our sequences to see if they're rare but
+    // with a close match to a known good kmer (neighbour).  Correct if so.
+    int nc = 0;
+    int nbases = 0;
+    for (i = 0; i < n; i++) {
+	char *seq = h[i].seq;
+	int len = strlen(seq), j;
+	char *s2 = NULL;
+
+#undef EDGE_DIST
+//#define EDGE_DIST 3
+#define EDGE_DIST 0
+	for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {
+	    HashItem *hi, *hi2;
+
+	    // Ditch common words
+	    hi = HashTableSearch(hash, seq+j, errk);
+	    //fprintf(stderr, "Word %.*s freq %d\n", errk, seq+j, hi?(int)hi->data.i:-1);
+	    if (hi && hi->data.i >= min_count) {
+		//fprintf(stderr, "Word %.*s not in neighbour hash %p %d, min %d\n", errk, seq+j,
+		//	hi, hi?(int)hi->data.i:-1, min_count);
+		continue;
+	    }
+
+	    // Not common, but also not a neighbour of a common kmer?
+	    hi2 = HashTableSearch(neighbours, seq+j, errk);
+	    if (!hi2 || !hi2->data.p)
+		continue;
+
+	    //fprintf(stderr, "Word %.*s matches %.*s\n", errk, seq+j, errk, (char *)hi2->data.p);
+
+	    // Found a match, find diff and correct it.
+	    int k;
+	    for (k = 0; k < errk; k++)
+		if (seq[j+k] != ((char *)hi2->data.p)[k])
+		    break;
+	    if (k == errk)
+		continue;
+
+	    // We modify a new copy here so we don't change the hash keys.
+	    //
+	    // However we should consider pointing seq to this temporary copy
+	    // so we can fix neighbouring mismatching bases (and remove the
+	    // j+=k at the loop end).
+	    if (!s2) {
+		new_seq[i] = s2 = string_alloc(sp, len+1);
+		memcpy(s2, seq, len);
+		s2[len] = '\0';
+	    }
+
+	    s2[j+k] = ((char *)hi2->data.p)[k];
+	    nc++;
+	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n",
+	    //        errk, hi->key, (int)hi->data.i, errk, (char *)hi2->data.p);
+
+	    j += k; // skip to the next word not containing the corrected base
+	}
+
+	// debug
+	if (s2) {
+	    for (j = 0; j < len; j++)
+		if (s2[j] != seq[j])
+		    nbases++;
+	}
+    }
+    fprintf(stderr, "Corrected %d bases (%5.2f%%)\n",
+	    nbases, 100.0*nbases/tbases);
+
+    // Finally replace the original sequences with the edited ones.
+    // We delay this to here so our hash table keys don't change under
+    // us, allowing us to avoid costly strdups in the hash table code.
+    for (i = 0; i < n; i++) {
+	if (new_seq[i])
+	    strcpy(h[i].seq, new_seq[i]);
+    }
 
     string_pool_destroy(sp);
     HashTableDestroy(hash, 0);
@@ -3820,7 +4297,7 @@ int trim_adapters(haps_t *h, int n, char *fn, int kmer, int min_qual) {
 		    right_count++;
 		    break;
 		}
-		    
+
 		//printf("%s: %d/%d %.*s %d\n", h[i].name, j, len-kmer, kmer, seq+j, (int)hi->data.i);
 	    }
 	}
@@ -4325,7 +4802,7 @@ void bam_reverse(bam_hdr_t *hdr, bam1_t *b) {
 	iseq[k] = (t >> 4) | (t << 4);
     }
     if (odd) b->core.l_qseq--;
-    
+
 
     // Swap position
     b->core.pos = hdr->target_len[b->core.tid] - bam_endpos(b);
@@ -4384,7 +4861,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	}
     }
 #endif
-    
+
     init_X128_score(-4,4);
 
     // Convert BAMS to seqs instead, so we can perform edits on them
@@ -4402,10 +4879,22 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
 //#define correct_errors(h,n,k,m,q) correct_errors##k(h,n,m,q)
 
-    correct_errors(haps, nhaps, 27, 3, 0);
-    correct_errors(haps, nhaps, 25, 2, 0);
-    correct_errors(haps, nhaps, 20, 2, 0);
-    correct_errors(haps, nhaps, 14, 2, 0);
+    // Approx 10sec of 20:10000000-11000000 region is here (out of ~20 total)
+    // Not error correcting slows down other bits though, as well as having
+    // poorer results.  Consider matching multiple kmers simultaneously or using
+    // a different matching algorithm.
+//    correct_errors(haps, nhaps, 27, 3, 0);
+//    correct_errors(haps, nhaps, 25, 2, 0);
+//    correct_errors(haps, nhaps, 20, 2, 0);
+//    correct_errors(haps, nhaps, 14, 2, 0);
+
+    correct_errors_fast(haps, nhaps, 27, 3);
+    correct_errors_fast(haps, nhaps, 27, 3);
+    correct_errors_fast(haps, nhaps, 25, 2);
+    correct_errors_fast(haps, nhaps, 20, 2);
+    correct_errors_fast(haps, nhaps, 14, 2);
+
+    //    correct_errors(haps, nhaps, 14, 2, 0);
 
     // tried:
     // 27, 25, 20, 14 (good; 82B cycles)
@@ -4484,7 +4973,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     // Also try this after find_insertions() call
 #if 0
-    cons = compute_consensus(g); 
+    cons = compute_consensus(g);
     if (add_seq(g, cons->seq, 0, 0) < 0 || loop_check(g, 0)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
