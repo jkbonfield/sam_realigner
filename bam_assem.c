@@ -3901,6 +3901,8 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    if (F[i] >= min_count)
 		count_good += F[i]; // approximation
 	}
+	if (!cnt)
+	    return 0;
 	double mean = (double)sum/cnt;
 	double sd = sqrt(sum_sq/cnt - mean*mean);
 	fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
@@ -3918,6 +3920,8 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 		sum += i*F[i];
 		sum_sq += i*i*F[i];
 	    }
+	    if (!cnt)
+		return 0;
 	    mean = (double)sum/cnt;
 	    sd = sqrt(sum_sq/cnt - mean*mean);
 
