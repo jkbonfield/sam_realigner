@@ -571,6 +571,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    if (flush_bam_list(&cd, b_hist, tid, INT_MAX, out, header) < 0)
 		return -1;
 	    last_tid = tid;
+	    last_pos = 0;
 	    start_reg = INT_MAX, end_reg = INT_MIN;
 	    start_ovl = INT_MAX, end_ovl = INT_MIN;
 	    total_depth = 0;
