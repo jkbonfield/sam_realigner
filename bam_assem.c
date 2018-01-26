@@ -3888,6 +3888,7 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    //fprintf(stderr, "KMER %.*s freq %d\n", errk, hi->key, hi->data.i);
 	    F[hi->data.i > 255 ? 255 : hi->data.i]++;
 	}
+	HashTableIterDestroy(hiter);
 
 	// Compute mean of values > 2 and s.d.
 	int cnt = 0, sum = 0, sum_sq = 0;
@@ -3901,8 +3902,10 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    if (F[i] >= min_count)
 		count_good += F[i]; // approximation
 	}
-	if (!cnt)
+	if (!cnt) {
+	    free(new_seq);
 	    return 0;
+	}
 	double mean = (double)sum/cnt;
 	double sd = sqrt(sum_sq/cnt - mean*mean);
 	fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
@@ -3920,8 +3923,10 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 		sum += i*F[i];
 		sum_sq += i*i*F[i];
 	    }
-	    if (!cnt)
+	    if (!cnt) {
+		free(new_seq);
 		return 0;
+	    }
 	    mean = (double)sum/cnt;
 	    sd = sqrt(sum_sq/cnt - mean*mean);
 
@@ -4064,6 +4069,7 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
     string_pool_destroy(sp);
     HashTableDestroy(hash, 0);
     HashTableDestroy(neighbours, 0);
+    free(new_seq);
 
     return nc;
 }
