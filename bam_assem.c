@@ -476,13 +476,13 @@ dgraph_t *graph_create(int kmer) {
     g->kmer = kmer;
     //g->_node_hash = kh_init(node_hash);
     //g->node_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
-    g->node_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS);
+    g->node_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
     if (!g->node_hash) {
 	graph_destroy(g);
 	return NULL;
     }
 
-    g->edge_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS);
+    g->edge_hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_FUNC_TCL);
     if (!g->edge_hash) {
 	graph_destroy(g);
 	return NULL;
@@ -4898,7 +4898,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 //    correct_errors(haps, nhaps, 20, 2, 0);
 //    correct_errors(haps, nhaps, 14, 2, 0);
 
-    correct_errors_fast(haps, nhaps, 27, 3);
+    correct_errors_fast(haps, nhaps, 29, 3);
     correct_errors_fast(haps, nhaps, 27, 3);
     correct_errors_fast(haps, nhaps, 25, 2);
     correct_errors_fast(haps, nhaps, 20, 2);
