@@ -1215,9 +1215,74 @@ static void node_common_ancestor_ins(dgraph_t *g, node_t *n1, node_t *n2, node_t
     *n2_p = n1;
 }
 
+// Recursively scan down from curr looking for visited to other_path.
+// If found, prune the link to avoid this path from being reached.
+void prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, int other_path,
+			 int *vis, int *nvis) {
+ tail_loop:
+    if (curr->id == end->id)
+	return;
+
+    if (curr->visited & (1<<30))
+	return;
+
+    if ((curr->visited & ~(1<<30)) == (other_path & ~(1<<30))) {
+	fprintf(stderr, "Found internal bubble. Prune link %d->%d\n", last->id, curr->id);
+	int i, j;
+	for (i = j = 0; i < last->n_out; i++) {
+	    if (last->out[i]->n[1] != curr->id)
+		last->out[j++] = last->out[i];
+	}
+	last->n_out = j;
+
+	for (i = j = 0; i < curr->n_in; i++) {
+	    if (curr->in[i]->n[1] != last->id) 
+		curr->in[j++] = curr->in[i];
+	}
+	curr->n_in = j;
+	return;
+    }
+
+    vis[(*nvis)++] = curr->id;
+    curr->visited |= (1<<30);
+
+    if (curr->n_out == 1) {
+	node_t *next = g->node[curr->out[0]->n[1]];
+	last = curr;
+	curr = next;
+	goto tail_loop;
+    }
+
+    int i;
+    for (i = 0; i < curr->n_out; i++)
+	prune_extra_recurse(g, curr, g->node[curr->out[i]->n[1]], end, other_path, vis, nvis);
+}
+
+// Hunt through path looking for branch points that stray from the path.
+// When found, check if these could lead to other other path forming
+// an second (inner) bubble.
+void prune_extra_bubbles(dgraph_t *g, node_t **path, int np, node_t *n_end, int other_path,
+			 int *vis, int *nvis) {
+    int i, j;
+    int p_id = path[0]->visited;
+
+    for (i = np-1; i >= 0; i--) {
+	node_t *n = path[i];
+	if (n->n_out == 1)
+	    continue;
+	for (j = 0; j < n->n_out; j++) {
+	    node_t *n2 = g->node[n->out[j]->n[1]];
+	    if ((n2->visited & ~(1<<30)) == (p_id & ~(1<<30)) || n2->id == n_end->id)
+		continue;
+	    //fprintf(stderr, "Check branch on path %d at %d -> %d\n", p_id, n->id, n2->id);
+	    prune_extra_recurse(g, n, n2, n_end, other_path, vis, nvis);
+	}
+    }
+}
+
 // Node n_end has parents p1 and p2 which meet up again at some common
 // node n_start.  Find n_start.
-int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
+int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int *vis, int *nvis) {
     node_t **path1 = malloc(g->nnodes * sizeof(node_t *));
     node_t **path2 = malloc(g->nnodes * sizeof(node_t *));
     int np1 = 0, np2 = 0, i, j;
@@ -1252,16 +1317,46 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2) {
     // Create (reversed) paths
     n = p1;
     while (n && n->id != start) {
-	//printf("1[%d]: %d\n", np1, n->id);
+	//fprintf(stderr, "1[%d]: %d\n", np1, n->id);
 	path1[np1++] = n;
+	n->visited = (1<<29);
 	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
     }
 
     n = p2;
     while (n && n->id != start) {
-	//printf("2[%d]: %d\n", np2, n->id);
+	//fprintf(stderr, "2[%d]: %d\n", np2, n->id);
 	path2[np2++] = n;
+	n->visited = (1<<29)-1;
 	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+    }
+
+    // Recurse down path1 looking for anything that hits path2 and
+    // vice versa, excluding the obvious final bubble merge.
+    // In theory our bubble will be small and not contain self-bubbles,
+    // but there can be occasions where the smallest bubble contains a
+    // longer one.  Eg:
+    //       |
+    //      .A.       Bubble A to B, but another path from C to D
+    //    ./   \.     exists that is longer and not found by the
+    //   /       \    initial bubble finding algorithm.
+    //  C--O-O-O--D
+    //   \.     ./    Path 1 = (B),C,(A)
+    //     \. ./      Path 2 = (B),D,(A)
+    //       B
+    //       |
+
+    // This works and fixes a crash with CHM1_CHM13_2.bam -r 19:3168000-3169500
+    // but we have this situation often without it being detrimental
+    // (and indeed it's sometimes an improvement) plus it's slower.
+    //
+    // Alternatively spot we're going wrong and just give up.  It's once in a
+    // blue moon that it matters and if we don't realign there it isn't the end
+    // of the world.
+
+    if (np1 && np2) {
+	prune_extra_bubbles(g, path1, np1, n_end, path2[0]->visited, vis, nvis);
+	prune_extra_bubbles(g, path2, np2, n_end, path1[0]->visited, vis, nvis);
     }
 
     if (!np1 && !np2) {
@@ -1667,7 +1762,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 		//rewind_paths(g, &head, merge_id, n);
 
 		// Note this could form a loop, but if so it gets broken for us.
-		node_common_ancestor(g, n, pn, g->node[merge_id]);
+		node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis);
 
 		// FIXME: merge forks.
 		// Test: just cull one instead.
@@ -1741,7 +1836,8 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 
 void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
     int i, found;
-    int *v = malloc(g->nnodes * sizeof(int)), nv = 0;
+    // One for this loop and 1 each for the two prune_extra_bubbles loops
+    int *v = malloc(g->nnodes*3 * sizeof(int)), nv = 0;
 
     for (i = 0; i < g->nnodes; i++)
 	g->node[i]->visited = 0;
@@ -2454,11 +2550,12 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 
 
 	//fprintf(fp, "  n_%d [label=\"%d @ %d.%d x %d, ^%d", n->id, n->id, n->pos, n->ins, n->count, n->above);
-	fprintf(fp, "  n_%d [label=\"", n->id);
+	fprintf(fp, "  n_%d [label=\"%d\\n", n->id, n->id);
 	{
 	    int x;
 	    for (x=0; x<n->n_hi; x++)
-		fprintf(fp, "%s%.*s", x?",\\n":"",n->hi[x]->key_len, n->hi[x]->key);
+		//fprintf(fp, "%s%.*s", x?",\\n":"",n->hi[x]->key_len, n->hi[x]->key);
+		fprintf(fp, "%s%.*s", x?",\\n":"", 5, n->hi[x]->key);
 	}
 	//if (n->ins) fprintf(fp, ".%d", n->ins);
 	//fprintf(fp, "  n_%d [label=\"%d", n->id, n->id);
@@ -4701,7 +4798,7 @@ void number_nodes_above_recurse(dgraph_t *g, node_t *n, int *queue, int *nqueue,
 	if (count < g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1)
 	    count = g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1;
 
-    fprintf(stderr, "node %d, count %d, in %d, out %d\n", n->id, count, n->n_in, n->n_out);
+    //fprintf(stderr, "node %d, count %d, in %d, out %d\n", n->id, count, n->n_in, n->n_out);
 
     while (n) {
 	first--;
@@ -5303,8 +5400,10 @@ int main(int argc, char **argv) {
 	free(h);
     }
 
-    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0) < 0)
+    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0) < 0) {
+	fprintf(stderr, "Realign failed\n");
 	return 1;
+    }
 
     // FIXME/TODO: sort output
     samFile *fp;
