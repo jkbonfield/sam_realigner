@@ -701,7 +701,7 @@ HashItem *HashTableSearch(HashTable *h, char *key, int key_len) {
 	hv = hash64(h->options & HASH_FUNC_MASK, (uint8_t *)key, key_len) & h->mask;
 
 	for (hi = h->bucket[hv]; hi; hi = hi->next) {
-	    if (key_len == hi->key_len &&
+	    if (key_len == hi->key_len && *key == *hi->key &&
 		memcmp(key, hi->key, key_len) == 0)
 		return hi;
 	}
