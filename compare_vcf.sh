@@ -65,30 +65,37 @@ $bcftools isec -c both -p $v2.isec $v1.norm.vcf.gz $v2.norm.vcf.gz
 v1_snp=`    $bcftools view -H -i "TYPE='snp'" $v2.isec/0000.vcf|wc -l`
 v2_snp=`    $bcftools view -H -i "TYPE='snp'" $v2.isec/0001.vcf|wc -l`
 v2_snp_hq=` $bcftools view -H -i "TYPE='snp' && QUAL >= $qual" $v2.isec/0001.vcf|wc -l`
+v2_snp_fi=` $bcftools view -H -i "TYPE='snp' && QUAL >= $qual && DP<90" $v2.isec/0001.vcf|wc -l`
 v12_snp=`   $bcftools view -H -i "TYPE='snp'" $v2.isec/0003.vcf|wc -l`
 v12_snp_hq=`$bcftools view -H -i "TYPE='snp' && QUAL >= $qual" $v2.isec/0003.vcf|wc -l`
+v12_snp_fi=`$bcftools view -H -i "TYPE='snp' && QUAL >= $qual && DP<90" $v2.isec/0003.vcf|wc -l`
 
 v1_indel=`    $bcftools view -H -i "TYPE='indel'" $v2.isec/0000.vcf|wc -l`
 v2_indel=`    $bcftools view -H -i "TYPE='indel'" $v2.isec/0001.vcf|wc -l`
 v2_indel_hq=` $bcftools view -H -i "TYPE='indel' && QUAL >= $qual" $v2.isec/0001.vcf|wc -l`
+v2_indel_fi=` $bcftools view -H -i "TYPE='indel' && IDV >= 3 && IMF >= 0.03" $v2.isec/0001.vcf|wc -l`
 v12_indel=`   $bcftools view -H -i "TYPE='indel'" $v2.isec/0003.vcf|wc -l`
 v12_indel_hq=`$bcftools view -H -i "TYPE='indel' && QUAL >= $qual" $v2.isec/0003.vcf|wc -l`
+v12_indel_fi=`$bcftools view -H -i "TYPE='indel' && IDV >= 3 && IMF >= 0.03" $v2.isec/0003.vcf|wc -l`
 
 # quality trimmed FN aren't the records private to v1 above QUAL, but the
 # total number of records not in v12 after filtering.  Thus as we increase
 # acceptance threshold to reduce FP we increase FN.
 v1_snp_hq=`expr $v1_snp + $v12_snp - $v12_snp_hq`
 v1_indel_hq=`expr $v1_indel + $v12_indel - $v12_indel_hq`
+v1_snp_fi=`expr $v1_snp + $v12_snp - $v12_snp_fi`
+v1_indel_fi=`expr $v1_indel + $v12_indel - $v12_indel_fi`
 
 # Assumption A.vcf is truth set and B.vcf is test set
-printf "SNP   TP %7d / %7d\n" $v12_snp  $v12_snp_hq
-printf "SNP   FP %7d / %7d\n" $v2_snp   $v2_snp_hq
-printf "SNP   FN %7d / %7d\n" $v1_snp   $v1_snp_hq
+printf "SNP          ALL /   Q>=30 / Filtered\n"
+printf "SNP   TP %7d / %7d / %7d\n" $v12_snp  $v12_snp_hq  $v12_snp_fi
+printf "SNP   FP %7d / %7d / %7d\n" $v2_snp   $v2_snp_hq   $v2_snp_fi
+printf "SNP   FN %7d / %7d / %7d\n" $v1_snp   $v1_snp_hq   $v1_snp_fi
 #printf "SNP   %4.1f%% prec, %4.1f%% rec\n" 100.0*$v12_snp_hq/($v12_snp_hq+$v2_snp_hq) 100.0*$v12_snp_hq/($v12_snp_hq+$v1_snp_hq);
 printf "\n";
-printf "InDel TP %7d / %7d\n" $v12_indel $v12_indel_hq
-printf "InDel FP %7d / %7d\n" $v2_indel  $v2_indel_hq
-printf "InDel FN %7d / %7d\n" $v1_indel  $v1_indel_hq
+printf "InDel TP %7d / %7d / %7d\n" $v12_indel $v12_indel_hq $v12_indel_fi
+printf "InDel FP %7d / %7d / %7d\n" $v2_indel  $v2_indel_hq  $v2_indel_fi
+printf "InDel FN %7d / %7d / %7d\n" $v1_indel  $v1_indel_hq  $v1_indel_fi
 #printf "InDel %4.1f%% prec, %4.1f%% rec\n" 100.0*$v12_indel_hq/($v12_indel_hq+$v2_indel_hq) 100.0*$v12_indel_hq/($v12_indel_hq+$v1_indel_hq);
 
 #rm $v1.norm* $v2.norm*
