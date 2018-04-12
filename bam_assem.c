@@ -196,7 +196,7 @@ void init_X128_score(int mis, int mat) {
     // All to start with, to set mismatch (A vs G*) baseline.
     for (i = 0; i < 11; i++) {
 	for (j = 0; j < 11; j++) {
-	    X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis;	
+	    X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis;
 	    X128[tolower("AMRWCSYGKTN"[i])][(uc)"AMRWCSYGKTN"[j]] = mis;
 	    // A* vs C* is a partial match (pad wise). How to score?
 	    X128[tolower("AMRWCSYGKTN"[i])][tolower("AMRWCSYGKTN"[j])] = mis/2;
@@ -778,7 +778,7 @@ int loop_check(dgraph_t *g, int loop_break) {
 	// Have we been here before? If so skip it.
 	if (n->pruned || n->visited)
 	    continue;
-	
+
 	// We have a head node, but it may link up with
 	// previously scanned head nodes.  All we care
 	// about is following this starting point doesn't
@@ -1241,7 +1241,7 @@ void prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, i
 	last->n_out = j;
 
 	for (i = j = 0; i < curr->n_in; i++) {
-	    if (curr->in[i]->n[1] != last->id) 
+	    if (curr->in[i]->n[1] != last->id)
 		curr->in[j++] = curr->in[i];
 	}
 	curr->n_in = j;
@@ -1619,7 +1619,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 		while (oplen-- && x1 < np1) {
 		    //fprintf(stderr, "D %4d    -\n", n1->id);
 		    //n1->bases[g->kmer-1][4]++;
-		    //memcpy(n1->bases, vn[p++], 5*sizeof(int)); // FIXME?	
+		    //memcpy(n1->bases, vn[p++], 5*sizeof(int)); // FIXME?
 		    memcpy(&n1->bases[g->kmer-1], vn[p++], 5*sizeof(int));
 		    n1 = path1[++x1];
 		}
@@ -2315,7 +2315,7 @@ int merge_head_tips(dgraph_t *g, char *ref, int len) {
 	}
 	for (j = g->kmer-2; j >= 0 && hidx < hlen; j--)
 	    memcpy(&head[hidx++], last->bases[j], sizeof(*head));
-	
+
 //	// Reverse the list; shared code with assign_coords
 //	int (*v1)[5] = head;
 //	int I, J, K;
@@ -2955,7 +2955,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    memset(sub, 'N', g->kmer);
 	    memset(sub_k, 'N', i);
 	    sub_k += i;
-	
+
 	    // First node found has kmer bases, but we only know the position of
 	    // the last base.  Greedy match backwards to determine the correct
 	    // path for earlier bases.  We simply scan upwards on our (now linear)
@@ -3098,7 +3098,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
 		    if (!np)
 			break;
-		
+
 		    // Track path of which out[x] leads from last to n.
 		    int i;
 		    for (i = 0; i < np->n_out; i++)
@@ -3210,72 +3210,40 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 // Seq      CTAGTGTGTGTGTCTCTCTCTCAGCTAG  spans
 // Seq          tgtgtgtgtCTCTCTCTCAGCTAG  spans 2, but not 1
 // Seq                    tctctctcAGCTAG  doesn't span 2
+//
+// This code also modifies quality values via the BAQ style tag, taking note
+// of heterozygous indels in short tandem repeats giving potential sloppiness
+// in which base is in which column.  In this case we replace all qualities
+// in an STR with the minimum observed quality, minus a fixed penalty.
 int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, int *new_pos) {
     // Compute short tandem repeats.
-    uint32_t *str = NULL, i;
+    uint32_t *str = NULL, *baq_s, i;
     int len = strlen(ref), clen = strlen(cons);
 
     // Align ref and consensus to work out regions of heterozygous and
     // non-heterozygous indel.
 
-#if 0
-    int *S = malloc((clen+len) * sizeof(*S));
-    if (!S)
-	return -1;
-    align_ss(ref, cons, len, clen, 0, 0, X128, GOPEN,GEXT, S, 1,1,1,1);
-    fprintf(stderr, "Ref=%s\n", ref);
-    fprintf(stderr, "Con=%s\n", cons);
-    //display_ss(ref, cons, len, clen, S, 0, 0);
-    //fflush(stderr);
-    //fflush(stdout);
-
-    uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
-    if (!indel)
-	return -1;
-
-    int rp = 0, cp = 0, *S2 = S;
-    while (rp < len && cp < clen) {
-	int op = *S2++;
-	if (op == 0) {
-	    if (islower(cons[cp]))
-		indel[rp] = 1;
-	    assert(rp >= 0 && rp < len);
-	    rp++; cp++;
-	} else if (op > 0) {
-	    // ins in cons
-	    int het = 0;
-	    while (op--) {
-		//fprintf(stderr, "Ins at %d: %c\n", rp+start, cons[cp]);
-		if (islower(cons[cp++]))
-		    het=1;
-	    }
-	    if (het) {
-		indel[rp>0?rp-1:rp] = 1;
-		indel[rp] = 1;
-		assert(rp >= 0 && rp < len);
-	    }
-	} else {
-	    // del in cons
-//	    while (op++) {
-//		if (rp < len)
-//		    indel[rp++] = 1;
-//	    }
-	    rp += -op;
-	}
-    }
-    free(S);
-#else
     uint32_t *cigar = NULL;
     int ncigar = 0;
     ksw_global_end(len, (uint8_t *)ref, clen, (uint8_t *)cons,
-		   128, (int8_t *)X128, GOPEN, GEXT, 0,
+		   //128, (int8_t *)X128, GOPEN, GEXT, 0,
+		   128, (int8_t *)X128, 3, 1, 0, // more generous with permitting indels
 		   &ncigar, &cigar, 0, 0, 0, 0);
+    ksw_print_aln(stderr, len, ref, clen, cons, ncigar, cigar);
 
     uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
-    if (!indel)
+    uint8_t *baq_i = calloc(1, len); // boolean; 1 if is indel
+    if (!indel || !baq_i)
 	return -1;
 
-    int rp = 0, cp = 0, k = 0;
+#define BAQ_HET 1
+#define BAQ_HOM 2
+#define BAQ_NOSPAN 4
+
+    // Compute indel[] and baq_i[] arrays holding information on whether
+    // this reference coordinate is a heterozygous indel (or just an indel
+    // in general for BAQ analysis).
+    int rp = 0, cp = 0, k = 0; // rp/cp = ref/cons position.
     while (rp < len && cp < clen) {
 	if (k >= ncigar)
 	    abort();//break;
@@ -3285,9 +3253,10 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	switch(op) {
 	case BAM_CMATCH:
 	    while (oplen-- && rp < len) {
-		if (islower(cons[cp]))
+		if (islower(cons[cp])) {
+		    baq_i[rp] |= BAQ_HET;
 		    indel[rp] = 1;
-		assert(rp >= 0 && rp < len);
+		}
 		rp++; cp++;
 	    }
 	    break;
@@ -3302,13 +3271,34 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    if (het) {
 		indel[rp>0?rp-1:rp] = 1;
 		indel[rp] = 1;
-		assert(rp >= 0 && rp < len);
+		baq_i[rp>0?rp-1:rp] |= BAQ_HET;
+		baq_i[rp] |= BAQ_HOM;
+	    } else {
+		baq_i[rp>0?rp-1:rp] |= BAQ_HOM;
+		baq_i[rp] |= BAQ_HOM;
 	    }
 	    break;
 	}
 
 	case BAM_CINS:
 	    // ins in ref, or del in cons
+	    if (islower(cons[cp]) ||
+		(cp>0 && islower(cons[cp-1])) ||
+		(cp+1<len && islower(cons[cp+1]))) {
+		// in or adjacent to heterozygous indel.
+		int i;
+		for (i = 0; i < oplen; i++) {
+		    if (rp+i >= 0 && rp+i < len) {
+			baq_i[rp+i] |= BAQ_HET;
+			indel[rp] = 1;
+		    }
+		}
+	    } else {
+		int i;
+		for (i = 0; i < oplen; i++)
+		    if (rp+i >= 0 && rp+i < len)
+			baq_i[rp+i] |= BAQ_HOM;
+	    }
 	    rp += oplen;
 	    break;
 
@@ -3317,14 +3307,14 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	}
     }
     free(cigar);
-#endif
 
-    // Find STR and mark nodes as belonging to specific STR numbers.
+    // Find STRs and filter out those that aren't inside known indel regions.
     rep_ele *reps, *elt, *tmp;
     int str_num = 0;
 
     reps = find_STR(ref, len, 0);
     str = calloc(len, sizeof(*str));
+    baq_s = calloc(len, sizeof(*baq_s));
 
     DL_FOREACH_SAFE(reps, elt, tmp) {
 	if (elt->end - elt->start + 1 < MIN_STR)
@@ -3338,23 +3328,127 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    if (i >= 0 && i < len && indel[i])
 		break;
 	}
-	if (i == right)
-	    goto next;
 
-	if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
-	    for (i = elt->start; i < elt->end && i < len; i++)
-		str[i] |= (1<<str_num);
-	    str_num = (str_num+1)&31;
-
-	    //fprintf(stderr, "STR: %2d .. %2d %.*s\n", elt->start, elt->end,
-	    //	    elt->end - elt->start+1, &ref[elt->start]);
+	if (i != right) {
+	    if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
+		for (i = elt->start; i < elt->end && i < len; i++)
+		    str[i] |= (1<<str_num);
+		str_num = (str_num+1)&31;
+	    }
 	}
+
+	// For BAQ calculation instead of soft-clipping
+	if (elt->end > elt->start) {
+	    left  = elt->start < 0 ? 0 : elt->start;
+	    right = elt->end > len-1 ? len-1 : elt->end;
+	    for (i = left; i <= right; i++) {
+		if (baq_i[i]) {
+		    int baq_x = 0;
+		    for (i = left; i <= right; i++)
+			baq_x |= baq_i[i];
+		    //fprintf(stderr, "STR: %2d .. %2d %.*s |= %d\n", left+start, right+start, elt->end - elt->start+1, &ref[elt->start], baq_x);
+		    for (i = left; i <= right; i++)
+			baq_s[i] |= baq_x;
+		    break;
+		}
+	    }
+	}
+
     next:
 	DL_DELETE(reps, elt);
 	free(elt);
     }
 
-    // left edge;
+#define QSUB_HET    5
+#define QSUB_HOM    5
+#define QSUB_NOSPAN 5
+
+#if 1
+    // Indels within STRs have bases that may in the wrong column,
+    // so adjust their qualities according to the baq_s[] array.
+    for (i = 0; i < nbam; i++) {
+	bam1_t *b = bams[i];
+	if (b->core.flag & BAM_FUNMAP)
+	    continue;
+
+	int p = new_pos[i]+1-start;
+	//fprintf(stderr, "New seq: %s @ %d\n", bam_get_qname(b), new_pos[i]+1);
+	int cig_ind = 0, op, op_len = 0, qmin, pstart = -1, pbaq = 0;
+	uint8_t *qual = bam_get_qual(b);
+	uint32_t *cig = bam_get_cigar(b);
+	uint32_t new_qual[1024]; // FIXME max seq len
+	int j;
+	for (j = 0; j < b->core.l_qseq; j++,op_len--) {
+	    if (op_len == 0) {
+		if (cig_ind < b->core.n_cigar) {
+		    op = bam_cigar_op(cig[cig_ind]);
+		    op_len = bam_cigar_oplen(cig[cig_ind++]);
+		} else {
+		    op = BAM_CSOFT_CLIP;
+		    op_len = INT_MAX;
+		}
+	    }
+
+	    if (p >= 0 && p < len) {
+		if (baq_s[p] && pstart == -1) {
+		    // new STR
+		    pstart = j;
+		    qmin = qual[j];
+		    pbaq = baq_s[p];
+
+		    if (j == 0) // Starting in an STR implies even lower quality
+			pbaq |= 4;
+		} else if (baq_s[p] && pstart != -1) {
+		    pbaq |= baq_s[p];
+		    // continuation of STR
+		    if (qmin > qual[j])
+			qmin = qual[j];
+		} else if (!baq_s[p] && pstart != -1) {
+		    // end of STR
+		    int k;
+		    //fprintf(stderr, "QUALi %d..%d to %d\n", pstart+new_pos[i]+1, j-1+new_pos[i], qmin);
+		    if (pbaq & BAQ_HET) { // het is worse to deal with and has higher penalty
+			if (pbaq & BAQ_NOSPAN)
+			    qmin -= QSUB_NOSPAN;
+			for (k = pstart; k < j; k++)
+			    qual[k] = qmin-QSUB_HET>2 ?qmin-QSUB_HET :2;
+		    } else {
+			for (k = pstart; k < j; k++)
+			    //qual[k] = qmin>2+QSUB_HOM ?qmin-QSUB_HOM :2;
+			    qual[k] = qual[k]-QSUB_HOM>2 ?qual[k]-QSUB_HOM :2;
+		    }
+		    pstart = -1;
+		    pbaq = 0;
+		}
+	    }
+
+	    //fprintf(stderr, "%c %d\t%d\t%c\t%d\n", "MIDNSHP=XB"[op], j, (int)p+start+1, "=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(b), j)], baq_s[p]);
+	    if (bam_cigar_type(op) & 2)
+		p++;
+	}
+	fprintf(stderr, "pstart=%d\n", pstart);
+	if (pstart != -1) {
+	    int k;
+	    //fprintf(stderr, "QUALe %d..%d to %d\n", pstart+new_pos[i]+1, b->core.l_qseq+new_pos[i], qmin);
+
+	    // ending within a region implies lower qual still!
+	    if (pbaq & BAQ_HET) {
+		if (pbaq & BAQ_NOSPAN)
+		    qmin -= QSUB_NOSPAN;
+		for (k = pstart; k < b->core.l_qseq; k++)
+		    qual[k] = qmin-QSUB_HET>2 ?qmin-QSUB_HET :2;
+	    } else {
+		for (k = pstart; k < b->core.l_qseq; k++)
+		    //qual[k] = qmin>2+QSUB_HOM ?qmin-QSUB_HOM :2;
+		    qual[k] = qual[k]-QSUB_HOM>2 ?qual[k]-QSUB_HOM :2;
+	    }
+	}
+    }
+#endif
+
+#if 1
+    // Sequences that start or end within an STR overlapping a heterozygous
+    // indel do not correctly confirm the copy number, so soft-clip them.
     char *cig_str = NULL;
     int cig_str_len = 0, cig_str_ind;
     for (i = 0; i < nbam; i++) {
@@ -3465,8 +3559,11 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     }
 
     free(cig_str);
+#endif
     free(str);
     free(indel);
+    free(baq_s);
+    free(baq_i);
 
     return 0;
 }
@@ -3807,7 +3904,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
 	return -1;
 
     HashTable *hash = kmer_hash;
-    
+
     hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
     kmer_hash = hash;
 
@@ -4055,7 +4152,7 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    countw+=nw;
 	}
     }
-    
+
     //-----------
     // Compute kmer depth threshhold that corresponds to correcting ~90%
     // of the data set, and assume these represent correct kmers.
@@ -5321,9 +5418,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	bams[i]->core.flag = fl;
     }
 
-    // Fail if > 20% of the previously mapped reads become unmapped.
-    if ((nhaps-unmapped) >= .9*(nhaps-orig_unmapped)) {
+    // Fail unless at least 80% of the previously mapped reads are still mapped.
+    if ((nhaps-unmapped) >= .8*(nhaps-orig_unmapped)) {
 	for (i = 0; i < nhaps; i++) {
+	    // FIXME: inefficient, lots of work done twice!
 	    if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 1) < 0)
 		goto err;
 	}
@@ -5433,7 +5531,7 @@ haps_t *load_fasta(char *fn, int *nhaps) {
 	    fprintf(stderr, "Unknown format\n");
 	    return NULL;
 	}
-	
+
 	if (nh >= nalloc) {
 	    nalloc = nh ? nh*2 : 64;
 	    h = realloc(h, nalloc*sizeof(*h));
