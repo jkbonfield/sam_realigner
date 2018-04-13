@@ -680,6 +680,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    memset(&cons [last_pos+1 - start_cons], 'N', pos - (last_pos+1));
 	    memset(&cons2[last_pos+1 - start_cons], 'N', pos - (last_pos+1));
 	}
+	// FIXME: it's a bit of guesswork - no phasing here.
 	cons [pos - start_cons] = call;
 	cons2[pos - start_cons] = call2;
 
@@ -775,6 +776,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		end_reg = last_pos + p->margin;
 		start_ovl = left_most;
 		end_ovl = right_most;
+		// Expand start_ovl and end_ovl to include read extents that overlap start_reg
 		check_overlap(b_hist, start_reg, &start_ovl, &end_ovl);
 		fprintf(stderr, "PROB start %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
 		status = S_PROB;

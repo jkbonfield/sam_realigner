@@ -2732,6 +2732,84 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 #endif
 #endif
 
+int graph2dot_simple(dgraph_t *g, char *fn, int min_count) {
+    FILE *fp = stdout;
+
+    char *seq = malloc(g->nnodes+1);
+    int *nidx = malloc(g->nnodes * sizeof(*nidx));
+    int seq_len = 0;
+    int *start = malloc(g->nnodes * sizeof(*start));
+    int nstart = 0;
+
+    if (fn) {
+	fp = fopen(fn, "w");
+	if (!fp) {
+	    perror(fn);
+	    return -1;
+	}
+    }
+
+    // Interesting nodes
+    int i, j;
+    for (i = 0; i < g->nnodes; i++) {
+	node_t *n = g->node[i];
+	if (n->pruned)
+	    continue;
+
+	if (n->n_in != 1 || n->n_out > 1 ||
+	    (n->n_in == 1 && g->node[n->in[0]->n[1]]->n_out != 1)) {
+	    fprintf(stderr, "Interesting node %d = %d\n", nstart, n->id);
+	    start[nstart] = n->id;
+	    nidx[n->id] = nstart++;
+	}
+    }
+
+    fprintf(fp, "digraph g {\n");
+    for (i = 0; i < nstart; i++) {
+	node_t *n = g->node[start[i]];
+	int seq_len = 0;
+
+	if (n->count < min_count)
+	    continue;
+
+	for (;;) {
+	    char base = 4;
+	    int bcount = 0;
+	    int k;
+	    for (k = 0; k < 4; k++) {
+		if (bcount < n->bases[g->kmer-1][k]) {
+		    bcount = n->bases[g->kmer-1][k];
+		    base = k;
+		}
+	    }
+	    seq[seq_len++] = "ACGTN"[base];
+
+	    if (n->n_out != 1 || (n->n_out == 1 && g->node[n->out[0]->n[1]]->n_in != 1))
+		break;
+
+	    n = g->node[n->out[0]->n[1]];
+	}
+	seq[seq_len++] = 0;
+
+	fprintf(fp, "  n_%d [label=\"%s\"]\n", i, seq);
+	for (j = 0; j < n->n_out; j++) {
+	    if (g->node[n->out[j]->n[1]]->count < min_count)
+		continue;
+	    fprintf(fp, "  n_%d -> n_%d [penwidth=%f]\n", i, nidx[n->out[j]->n[1]], log(n->out[j]->count+1)+2);
+	}
+    }
+
+    fprintf(fp, "}\n");
+    if (fn)
+	return fclose(fp);
+
+    free(seq);
+    free(nidx);
+    free(start);
+
+    return 0;
+}
+
 typedef struct hseq {
     struct hseq *next;
     char *seq;  // ambig for alignments
@@ -3028,7 +3106,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 
 #define NO_SEQ_FIX
 #ifndef NO_SEQ_FIX
-	    bam_set_seqi_base(b, i+g->kmer-1, orig_seq[i+g->kmer-1]);
+	    bam_set_seqi_base(b, i+g->kmer-1, seq[i+g->kmer-1]);
 #endif
 
 	    //fprintf(stderr, "base %c vs %c vs %c\n", orig_seq[i+g->kmer-1], seq[i+g->kmer-1], "=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(b), i+g->kmer-1)]);
@@ -5242,6 +5320,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     fprintf(stderr, "Using kmer %d\n", kmer);
 
     graph2dot(g, "f.dot", 0);
+    //graph2dot_simple(g, "x.dot", 5);
 
     // Prune paths having < 2 counts
     //prune_edges(g, 2);
@@ -5378,6 +5457,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     // c2 only as c1 should be represented better by main assembly?
     // FIXME: make optional
+    fprintf(stderr, "Cons len = %d\n", cons_len);
     if (cons1 || cons2) {
 	if (cons1) add_seq(g, cons1, cons_len, 0);
 	if (cons2) add_seq(g, cons2, cons_len, 0);
