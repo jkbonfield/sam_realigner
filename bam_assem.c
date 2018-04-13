@@ -832,7 +832,7 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
     len = j;
 
     if (!(ref & IS_REF)) {
-	// Prune trailing Ns.
+	// Prune leading/trailing Ns.
 	while (*seq == 'N' && len > 0)
 	    seq++, len--;
 	while (seq[len-1] == 'N' && len > 0)
@@ -844,14 +844,14 @@ int add_seq(dgraph_t *g, char *seq, int len, int ref) {
 	// Ref: prune to no more than kmer-10 Ns
 	char *s2 = seq;
 	int l2 = len;
-	while (*s2 == 'N' && l2 > 0)
+	while (*s2 == 'N' && l2 > g->kmer)
 	    s2++, l2--;
-	if (l2 == 0)
-	    return 0;
-	if (len-l2 > g->kmer-10) {
-	    seq = s2 - (g->kmer-10);
-	    len = l2 - (g->kmer-10);
-	}
+//	if (l2 == 0)
+//	    return 0;
+//	if (len-l2 > g->kmer-10) {
+//	    seq = s2 - (g->kmer-10);
+//	    len = l2 - (g->kmer-10);
+//	}
     }
 
     counter++;
@@ -2454,7 +2454,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
     return 0;
 }
 #else
-#if 0
+#if 1
 int graph2dot(dgraph_t *g, char *fn, int wrap) {
     FILE *fp = stdout;
 
@@ -2955,6 +2955,63 @@ void bam_set_seqi_base(bam1_t *b, int pos, char base) {
     bam_set_seqi(bam_get_seq(b), pos, L[(uint8_t)base]);
 }
 
+// A tail tip which has gone off into unpositioned nodes.
+// Try a trivial match back to the aligned path to see how it matches
+// and whether we should adjust seq in order to get aligned coords again.
+#define TIP_MIN_COUNT 3
+#define TIP_MISMATCH 5
+int fix_tail(dgraph_t *g, node_t *last, char *seq, int len) {
+    int i;
+
+    //fprintf(stderr, "Try tail fix on %.*s\n", len, seq);
+
+    if (!last || last->pos < 0)
+	return; // cannot fix.
+
+    int score = 0, best_score = 0, best_i = 0;
+    for (i = 0; i < len-(g->kmer-1); i++) {
+	node_t *n = last, *p = NULL;
+	int j;
+	if (n->count < TIP_MIN_COUNT)
+	    break;
+
+	for (j = 0; j < n->n_out; j++) {
+	    if (g->node[n->out[0]->n[1]]->pos >= 0) {
+		p = g->node[n->out[0]->n[1]];
+		break;
+	    }
+	}
+	if (!p)
+	    break;
+
+	for (j = 0; j < p->n_hi; j++) {
+	    if (p->hi[j]->key[g->kmer-1] == seq[i+g->kmer-1])
+		break;
+	}
+	if (j == p->n_hi)
+	    j = 0;
+
+	//fprintf(stderr, "i=%d score=%d %.*s vs %.*s\n", i, score, p->hi[j]->key_len, p->hi[j]->key, g->kmer, seq+i);
+
+	if (seq[i+g->kmer-1] == p->hi[j]->key[g->kmer-1]) {
+	    score++;
+	} else {
+	    score-=TIP_MISMATCH;
+	    seq[i+g->kmer-1] = p->hi[j]->key[g->kmer-1];
+	}
+	if (best_score < score) {
+	    best_score = score;
+	    best_i = i;
+	}
+	last = p;
+    }
+
+    if (best_i+g->kmer < len)
+	seq[best_i+g->kmer]='x'; // force kmer to break and switch to soft-clip from here on
+    //fprintf(stderr, "best_i=%d, best_score=%d\nAlign up to %s\n", best_i, best_score, seq);
+
+    return best_i;
+}
 
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
 int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos, int doit) {
@@ -2988,7 +3045,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    break;
     }
 
-    if (!n/* || b->core.qual <= 10*/) {
+    if (!n) {
 	fprintf(stderr, "No match found for seq\n");
 	goto unmapped;
     }
@@ -3042,13 +3099,36 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    // using the known prefix sequence to anchor all bases rather than
 	    // just the last base in the kmer from our hash hit.
 	    //printf("\nFound %.*s => %p, subset of %.*s\n", g->kmer, seq+i, n, g->kmer*2, sub);
-	    for (j = 1; j < g->kmer; j++) {
+
+	    // The first g->kmer j are just moving the node back so the first base
+	    // is found and we can match the start of the kmer instead of the end.
+	    // Beyond that (g->kmer <= j < g->kmer+i) we're faking up sequence in
+	    // and attempt to resolve head-tips.  Do this only provided the alignment
+	    // is sufficiently good to original seq.
+
+	    int best_score = 0, score = 0, best_score_j = 1;
+	    //for (j = 1; j < g->kmer; j++) {
+	    for (j = 1; j - i <= g->kmer; j++) {
 		int k;
 		node_t *sn = NULL;
+		if (seq[-(j-1)+i+g->kmer-1] == sub_k[g->kmer-j]) {
+		    if (j<=g->kmer || n->count>=TIP_MIN_COUNT)
+			score++;
+		    if (best_score < score) {
+			best_score = score;
+			best_score_j = j;
+		    }
+		} else {
+		    score-=TIP_MISMATCH;
+		}
+		//fprintf(stderr, "j=%d %d %s %s\n", j, score, seq-(j-1)+i+g->kmer-1, sub_k + g->kmer-j);
 	    up_one:
 		//printf("Search for %.*s", g->kmer, sub_k-j);
-		for (k = 0; k < n->n_in; k++) {
+		for (k = 0; k < n->n_in; k++) { // added first only here
 		    node_t *s2 = g->node[n->in[k]->n[1]];
+		    if (s2->pos < 0)
+			continue;
+		    // and if j >= g->kmer then s2->count is high?
 		    int h;
 		    for (h = 0; h < s2->n_hi; h++) {
 			if (memcmp(sub_k-j+1, s2->hi[h]->key+1, g->kmer-1) == 0) {
@@ -3073,6 +3153,9 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		if (!n)
 		    break;
 	    }
+
+	    j = best_score_j;
+	    //fprintf(stderr, "Best score %d at j %d, seq %s %s\n", best_score, j, seq-(j-1)+i+g->kmer-1, sub_k + g->kmer-j);
 
 	    seq_start = -(j-1)+i;
 	    seq = sub_k-i;
@@ -3125,6 +3208,9 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    if (!(n = find_node(g, s1++, g->kmer, 0)) || n->pruned)
 		break;
 
+	    int fixed_suffix = 0;
+	fix_suffix:
+
 	    if (n->pos == pos+1 && n->ins == 0) {
 		ADD_CIGAR(BAM_CMATCH, 1);
 		pos++;
@@ -3166,46 +3252,60 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		// also a node prior to this that we didn't observe in our
 		// kmer stepping? (ie deletion)
 
-		// bubble up to check if D or P before I
-		node_t *np = NULL, *nn = n;
-		int path[MAX_SEQ] = {0}, path_ind = 0;
-		// Recheck all of this.
-		// It dates back to before we added 2D coordinates of
-		// Nth base inserted at Mth ref pos.
-		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
-		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
-		    if (!np)
+		fprintf(stderr, "Unmapped kmer %.*s in seq %.*s\n", n->hi[0]->key_len, n->hi[0]->key, len - i, s1-1);
+		int new_suffix = fixed_suffix ? 0 : fix_tail(g, last, s1-1, len-i);
+		if (new_suffix) {
+		    if (!(n = find_node(g, s1-1, g->kmer, 0)) || n->pruned)
 			break;
-
-		    // Track path of which out[x] leads from last to n.
-		    int i;
-		    for (i = 0; i < np->n_out; i++)
-			if (np->out[i]->n[1] == nn->id)
-			    break;
-		    path[path_ind++] = i;
+		    fixed_suffix = 1;
+		    goto fix_suffix;
 		}
+		break;
 
-		if (path_ind == MAX_SEQ)
-		    goto fail;
+		// Code below no longer necessary?  I think now insertions still have n->pos
+		// set, but also get n->ins set.  Hence n->pos == INT_MIN is only ever when
+		// we've strayed off the main path and are in a tail-tip.
 
-		// Now replay the path in order from last->n
-		np = last;
-		if (--path_ind > 0 && np->n_out > path[path_ind])
-		    np = g->node[np->out[path[path_ind]]->n[1]];
-		while (--path_ind >= 0) {
-		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
-		    if (np->pos >= 0 && !np->ins) {
-			ADD_CIGAR(BAM_CDEL, 1);
-			pos = np->pos;
-		    } else {
-			ADD_CIGAR(BAM_CPAD, 1);
-		    }
-		    if (path[path_ind] >= np->n_out)
-			goto fail; // under what scenario does this happen?
-		    np = g->node[np->out[path[path_ind]]->n[1]];
-		}
-
-		ADD_CIGAR(BAM_CINS, 1);
+//		// bubble up to check if D or P before I
+//		node_t *np = NULL, *nn = n;
+//		int path[MAX_SEQ] = {0}, path_ind = 0;
+//		// Recheck all of this.
+//		// It dates back to before we added 2D coordinates of
+//		// Nth base inserted at Mth ref pos.
+//		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
+//		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
+//		    if (!np)
+//			break;
+//
+//		    // Track path of which out[x] leads from last to n.
+//		    int i;
+//		    for (i = 0; i < np->n_out; i++)
+//			if (np->out[i]->n[1] == nn->id)
+//			    break;
+//		    path[path_ind++] = i;
+//		}
+//
+//		if (path_ind == MAX_SEQ)
+//		    goto fail;
+//
+//		// Now replay the path in order from last->n
+//		np = last;
+//		if (--path_ind > 0 && np->n_out > path[path_ind])
+//		    np = g->node[np->out[path[path_ind]]->n[1]];
+//		while (--path_ind >= 0) {
+//		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
+//		    if (np->pos >= 0 && !np->ins) {
+//			ADD_CIGAR(BAM_CDEL, 1);
+//			pos = np->pos;
+//		    } else {
+//			ADD_CIGAR(BAM_CPAD, 1);
+//		    }
+//		    if (path[path_ind] >= np->n_out)
+//			goto fail; // under what scenario does this happen?
+//		    np = g->node[np->out[path[path_ind]]->n[1]];
+//		}
+//
+//		ADD_CIGAR(BAM_CINS, 1);
 	    } else {
 		// soft clip from here on.
 		// OR... an internal mismatch that was pruned.
@@ -3504,7 +3604,6 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 	    if (bam_cigar_type(op) & 2)
 		p++;
 	}
-	fprintf(stderr, "pstart=%d\n", pstart);
 	if (pstart != -1) {
 	    int k;
 	    //fprintf(stderr, "QUALe %d..%d to %d\n", pstart+new_pos[i]+1, b->core.l_qseq+new_pos[i], qmin);
@@ -5405,7 +5504,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     if (!(cons = compute_consensus(g)))
 	goto err;
 
-    //fprintf(stderr, "cons=%s\n", cons->seq);
+    fprintf(stderr, "cons=%s\n", cons->seq);
     if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g, 0)) {
 	fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
