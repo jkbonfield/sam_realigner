@@ -1326,6 +1326,65 @@ void ksw_print_aln(FILE *fp, int len1, char *seq1, int len2, char *seq2, int nci
     }
 }
 
+// Local maximum snp count in a given window size
+int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32_t *cigar, int window) {
+    int max_snp = 0;
+    int snp = 0;
+
+    char *mis = calloc(len2, 1);
+    if (!mis)
+	return -1;
+
+    int i1 = 0, i2 = 0, i =0;
+    while (i1 < len1 || i2 < len2) {
+	int op = cigar[i] & BAM_CIGAR_MASK;
+	int oplen = cigar[i] >> BAM_CIGAR_SHIFT;
+	switch(op) {
+	case BAM_CMATCH:
+	    while (oplen--) {
+		if (toupper(seq1[i1]) != toupper(seq2[i2]))
+		    mis[i2]=1;
+		i1++;
+		i2++;
+	    }
+	    //i1+=oplen;
+	    //i2+=oplen;
+	    break;
+
+	case BAM_CINS:
+	    i1 += oplen;
+	    break;
+
+	case BAM_CDEL: {
+	    i2 += oplen;
+	    break;
+	}
+
+	default:
+	    abort();
+	}
+
+	i++;
+    }
+
+    for (i2 = 0; i2 < len2 && i2 < window; i2++) {
+	if (mis[i2])
+	    snp++;
+    }
+    max_snp = snp;
+
+    for (; i2 < len2; i2++) {
+	snp += mis[i2] - mis[i2-window];
+	if (max_snp < snp)
+	    max_snp = snp;
+    }
+
+    free(mis);
+
+    fprintf(stderr, "new max snp count %d\n", max_snp);
+    return max_snp;
+}
+
 // Node n_end has parents p1 and p2 which meet up again at some common
 // node n_start.  Find n_start.
 int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int *vis, int *nvis) {
@@ -3014,7 +3073,8 @@ int fix_tail(dgraph_t *g, node_t *last, char *seq, int len) {
 }
 
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
-int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos, int doit) {
+int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos,
+		  uint32_t **new_cig, uint32_t *new_ncig) {
     int i;
     node_t *n = NULL, *last = NULL;
     int cig_op = 999, cig_len = 0;
@@ -3166,7 +3226,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 
 	// Start of read is unaligned.  Align back to ref or just soft-clip.
 	//b->core.pos = pos+shift;
-	if (doit) *new_pos = pos+shift;
+	*new_pos = pos+shift;
 	if (i + g->kmer-1 > 0) {
 	    int sc = i + g->kmer-1;
 	    ADD_CIGAR(BAM_CSOFT_CLIP, sc);
@@ -3178,6 +3238,18 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 #ifndef NO_QUAL_FIX
 	uint8_t *bam_seq = bam_get_seq(b);
 	uint8_t *bam_qual = bam_get_qual(b);
+
+	// Copy quality anyway, even if we later "fail".  The alternative
+	// is to write to a new qual buffer here and memcpy it later,
+	// as we do for cigars.
+	//
+	// Even when we fail to realign, modifying the qualities based on
+	// het indels within STRs is a key way of reducing false positives
+	// when calling existing alignments (albeit at the cost of a similar
+	// growth in false negatives).
+	//
+	// Eg chr1:24M-30M CHM1_CHM13_2.bam goes from
+	// FP/FN 142/167 to 85/217 (about 60 swing).
 #endif
 	for (; i <= len - g->kmer; i++) {
 #ifndef NO_QUAL_FIX
@@ -3342,22 +3414,25 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	}
 
 	ADD_CIGAR(999, 0); // flush
-	b->core.flag &= ~BAM_FUNMAP;
     } else {
     unmapped:
 	// Unmapped
-	b->core.flag |= BAM_FUNMAP;
+	cig_ind = 0;
     }
 
-    int old_len = mapped_bases(bam_get_cigar(b), b->core.n_cigar);
-    int new_len = mapped_bases(cig_a, cig_ind);
-    if (new_len < 0.7*old_len)
-	b->core.flag |= BAM_FUNMAP;
+    //int old_len = mapped_bases(bam_get_cigar(b), b->core.n_cigar);
+    //int new_len = mapped_bases(cig_a, cig_ind);
+    //if (new_len < 0.7*old_len) cig_ind = 0;
 
-    // TODO: don't replace cigar if alignment fails.
-    // Instead keep original, as likely still valid (it's against reference still)
-    if (doit)
-	replace_cigar(b, cig_ind, cig_a);
+    *new_ncig = cig_ind;
+    if (cig_ind) {
+	*new_cig = malloc(cig_ind * sizeof(uint32_t));
+	if (!*new_cig)
+	    return -1;
+	memcpy(*new_cig, cig_a, cig_ind * sizeof(uint32_t));
+    } else {
+	*new_cig = NULL;
+    }
 
     free(sub);
     return 0;
@@ -4937,7 +5012,10 @@ haps_t *compute_consensus(dgraph_t *g) {
 
 // Use the n->above fields to compute the consensus from the path
 // with longest/most use.
-void compute_consensus_above(dgraph_t *g, char *ref) {
+//
+// Returns SNP cluster count, defined as the maximum number of
+// SNPs within a given sliding window.
+int compute_consensus_above(dgraph_t *g, char *ref, int window) {
     int i, j;
     node_t *n;
     char *seq = malloc(g->nnodes + g->kmer + 1);
@@ -4972,7 +5050,7 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     }
 
     ref += g->kmer-1;
-//    fprintf(stderr, "vc Cons from node %d to %d: %s\nRef %s\n", start_n, end_n, &seq[j], ref);
+    //fprintf(stderr, "vc Cons from node %d to %d: %s\nRef %s\n", start_n, end_n, &seq[j], ref);
 
     // Compare vs ref.
     char *cons = seq+j;
@@ -5013,12 +5091,15 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
     }
 
     free(S);
+    int snp_count = 0;
 #else
     uint32_t *cigar = NULL;
     int ncigar = 0;
     ksw_global_end(cons_len, (uint8_t *)cons, ref_len, (uint8_t *)ref,
 		   128, (int8_t *)X128, 4,1, 0,
 		   &ncigar, &cigar, 0,0,0,0);
+
+    int snp_count = ksw_snp_count(cons_len, cons, ref_len, ref, ncigar, cigar, window);
 
 //    {
 //	fprintf(stderr, "v1 %.*s\nv2 %.*s\n", cons_len, cons, ref_len, ref);
@@ -5076,6 +5157,8 @@ void compute_consensus_above(dgraph_t *g, char *ref) {
 #endif
     free(seq);
     free(nnum);
+
+    return snp_count;
 }
 
 haps_t *bam2haps(bam1_t **bams, int nrecs) {
@@ -5300,10 +5383,122 @@ void bam_reverse_array(bam_hdr_t *hdr, bam1_t **bam, int nbams) {
 #endif
 
 
+int count_snps(char *ref_seq, int ref_len, int ref_start,
+	       bam1_t **bams, int nbams, haps_t *haps,
+	       uint32_t **cig_a, uint32_t *ncig_a,
+	       int window) {
+    int (*cons)[4] = calloc(ref_len, sizeof(*cons));
+    int i, j;
+    int L[256] = {0};
+    L['A'] = 1; L['C'] = 2; L['G'] = 4; L['T'] = 8;
+    int max_snps = 0, snps = 0;
+
+    for (i = 0; i < nbams; i++) {
+	bam1_t *b = bams[i];
+	if (b->core.flag & BAM_FUNMAP)
+	    continue;
+
+	uint32_t *cig = cig_a ? cig_a[i] : bam_get_cigar(b);
+	uint32_t ncig = ncig_a ? ncig_a[i] : b->core.n_cigar;
+	unsigned char *seq = haps ? (unsigned char *)haps[i].seq : bam_get_seq(b);
+	unsigned char *qual = bam_get_qual(b);
+	int op, oplen = 0, cig_ind = 0;
+	int sp = 0; // seq pos, relative to seq start
+	int rp = b->core.pos;
+	for (j = 0; j < ncig; j++) {
+	    op = cig[cig_ind] & BAM_CIGAR_MASK;
+	    oplen = cig[cig_ind++] >> BAM_CIGAR_SHIFT;
+
+	    switch(op) {
+	    case BAM_CMATCH:
+	    case BAM_CEQUAL:
+	    case BAM_CDIFF:
+		while (oplen--) {
+		    unsigned char base = haps
+			? L[seq[sp]]
+			: bam_seqi(seq, sp);
+
+		    if (rp >= ref_start && rp < ref_start + ref_len) {
+			if (base & 1) cons[rp-ref_start][0] += qual[sp];
+			if (base & 2) cons[rp-ref_start][1] += qual[sp];
+			if (base & 4) cons[rp-ref_start][2] += qual[sp];
+			if (base & 8) cons[rp-ref_start][3] += qual[sp];
+		    }
+
+		    sp++;
+		    rp++;
+		}
+		break;
+
+	    case BAM_CINS:
+	    case BAM_CSOFT_CLIP:
+		sp += oplen;
+		oplen = 0;
+		break;
+
+	    case BAM_CDEL:
+		//if (oplen > 100) max_snps += 50; // hack
+
+	    case BAM_CREF_SKIP:
+		rp += oplen;
+		oplen = 0;
+		break;
+	    }
+	}
+    }
+
+    assert(window < 128);
+    char b1_w[128];
+    for (i = 0; i < ref_len; i++) {
+	// trivial consensus computation
+	unsigned char b1 = 4, b2 = 4;
+	unsigned int s1 = 0, s2 = 0;
+	for (j = 0; j < 4; j++) {
+	    if (s1 < cons[i][j]) {
+		s2 = s1; b2 = b1;
+		s1 = cons[i][j];
+		b1 = j;
+	    } else if (s2 < cons[i][j]) {
+		s2 = cons[i][j];
+		b2 = j;
+	    }
+	}
+	if (!(b2>10 && b2/b1 > .2))
+	    b2 = b1;
+
+	// naive count of snp diff to reference.
+
+	//if (s1 != 0 && b1 != 'N' && ("ACGTN"[b1] != ref_seq[i] || b1 != b2)) {
+	if (s1 != 0 && b1 != 'N' && ref_seq[i] != 'N' &&
+	    "ACGTN"[b1] != ref_seq[i] &&
+	    "ACGTN"[b2] != ref_seq[i]) {
+	    snps++;
+	    b1_w[i&127] = 'x';
+	} else {
+	    b1_w[i&127] = ref_seq[i];
+	}
+	if (i >= window && b1_w[(i-window)&127] != ref_seq[i-window])
+	    snps--;
+	if (max_snps < snps)
+	    max_snps = snps;
+
+//	fprintf(stderr, "%d\t%4d %4d %4d %4d\t%d %d  %c %c\t%c %c\n",
+//		i+ref_start,
+//		cons[i][0], cons[i][1], cons[i][2], cons[i][3],
+//		b1, b2, "ACGTN"[b1], "ACGTN"[b2], ref_seq[i],
+//		s1 == 0 || "ACGTN"[b1] == ref_seq[i] ? ' ' : '*');
+    }
+//    fprintf(stderr, "max_snps = %d\n", max_snps);
+
+    free(cons);
+    return max_snps;
+}
+
 static int default_kmer = KMER;
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *ref_seq, int ref_len, int ref_start,
-		char *cons1, char *cons2, int cons_len) {
+		char *cons1, char *cons2, int cons_len,
+		int max_snp, int window) {
     int i, kmer = default_kmer, ret = -1;
     dgraph_t *g;
     haps_t *haps = NULL, *cons = NULL;
@@ -5577,40 +5772,67 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // through the graph representing the bulk of the data and then
     // align that as a whole to the reference.
     number_nodes_above(g);
-    compute_consensus_above(g, ref->seq);
+    if (compute_consensus_above(g, ref->seq, window) - max_snp >= 2) { // eg 3 in 15
+	// Reject as too many extra clustered variants.
+	// Likely we've made an error somewhere.
+
+	goto err; // FIXME: done later now instead, but this is still useful? Why?
+
+	// FIXME: still not het aware.  Unsure why consensus doesn't include het locations.
+	// Eg this doesn't filter 20:3018064[3569]
+    }
     graph2dot(g, "_G.dot", 0);
 
     //fprintf(stderr, "Pruning\n");
     //prune(g, argc > 3 ? atoi(argv[3]) : 2);
 
-#if 0
-    int orig_unmapped = 0;
-    for (i = 0; i < nhaps; i++)
+    // Compute new cigar strings
+    uint32_t **new_cig = calloc(nhaps, sizeof(*new_cig));
+    uint32_t *new_ncig = calloc(nhaps, sizeof(*new_ncig));
+    if (!new_cig || !new_ncig)
+	goto err;
+
+    int orig_unmapped = 0, unmapped = 0;
+    for (i = 0; i < nhaps; i++) {
+	if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i],
+			  &new_cig[i], &new_ncig[i]) < 0)
+	    goto err;
 	orig_unmapped += (bams[i]->core.flag & BAM_FUNMAP) ? 1 : 0;
-
-    int unmapped = 0;
-    for (i = 0; i < nhaps; i++) {
-	int fl = bams[i]->core.flag;
-        if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 0) < 0)
-	    goto err;
-	unmapped += (bams[i]->core.flag & BAM_FUNMAP) ? 1 : 0;
-	bams[i]->core.flag = fl;
+	unmapped += (new_ncig[i] == 0);
     }
 
-    // Fail unless at least 80% of the previously mapped reads are still mapped.
-    if ((nhaps-unmapped) >= .8*(nhaps-orig_unmapped)) {
-	for (i = 0; i < nhaps; i++) {
-	    // FIXME: inefficient, lots of work done twice!
-	    if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 1) < 0)
-		goto err;
-	}
-    }
-#else
-    for (i = 0; i < nhaps; i++) {
-        if (seq2cigar_new(g, ref->seq, shift, bams[i], haps[i].seq, &new_pos[i], 1) < 0)
-	    goto err;
-    }
+//    Not helpful yet - needs more work.
+//
+//    int orig_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, NULL, NULL, 15);
+//    int new_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, new_cig, new_ncig, 15);
+//
+//    fprintf(stderr, "Max snp change from %d to %d\n", orig_max_snp, new_max_snp);
+//
+//    // reject only on newly appearing excessively long deletions
+//    if (new_max_snp - orig_max_snp >= 10) goto err;
+
+//#define CHECK_DEPTH
+#ifdef CHECK_DEPTH
+    if ((nhaps-unmapped) >= .7*(nhaps-orig_unmapped))
 #endif
+	{
+	    for (i = 0; i < nhaps; i++) {
+		bam1_t *b = bams[i];
+		if (new_ncig[i]) {
+		    b->core.flag &= ~BAM_FUNMAP;
+		    replace_cigar(b, new_ncig[i], new_cig[i]);
+		    free(new_cig[i]);
+		} else {
+		    new_pos[i] = b->core.pos; // ie. don't change it
+		    b->core.flag |= BAM_FUNMAP;
+		}
+	    }
+	}
+#ifdef CHECK_DEPTH
+    else goto err;
+#endif
+    free(new_cig);
+    free(new_ncig);
 
     // Why g->kmer*2 for cons?
     trim_cigar_STR(ref->seq+g->kmer, shift, cons->seq+g->kmer*2-1, bams, nhaps, new_pos);
@@ -5769,7 +5991,7 @@ int main(int argc, char **argv) {
 	free(h);
     }
 
-    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0) < 0) {
+    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0, 0, 15) < 0) {
 	fprintf(stderr, "Realign failed\n");
 	return 1;
     }

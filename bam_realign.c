@@ -383,10 +383,28 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
 	seq_len = cons_len;
     }
 
+    // Max local snp density;
+    int max_snp = 0, window = 15;
+    {
+	int i, snp = 0;
+	for (i = 0; i < seq_len && i < window; i++)
+	    if (toupper(ref[i]) != toupper(cons[i]))
+		snp++;
+	max_snp = snp;
+
+	for (; i < seq_len; i++) {
+	    snp += (toupper(ref[i]) != toupper(cons[i]));
+	    snp -= (toupper(ref[i-window]) != toupper(cons[i-window]));
+	    if (max_snp < snp)
+		max_snp = snp;
+	}
+	//fprintf(stderr, "Max orig snp = %d\n", max_snp);
+    }
+
     if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl,
 		    cd->params->cons1 ? cons : NULL,
 		    cd->params->cons2 ? cons2 : NULL,
-		    cons_len) < 0) {
+		    cons_len, max_snp, window) < 0) {
 	free(new_pos);
 	free(ba);
 	if (fai)
