@@ -1222,14 +1222,14 @@ static void node_common_ancestor_ins(dgraph_t *g, node_t *n1, node_t *n2, node_t
 
 // Recursively scan down from curr looking for visited to other_path.
 // If found, prune the link to avoid this path from being reached.
-void prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, int other_path,
-			 int *vis, int *nvis) {
+int prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, int other_path,
+			int *vis, int *nvis) {
  tail_loop:
     if (curr->id == end->id)
-	return;
+	return 0;
 
     if (curr->visited & (1<<30))
-	return;
+	return 0;
 
     if ((curr->visited & ~(1<<30)) == (other_path & ~(1<<30))) {
 	fprintf(stderr, "Found internal bubble. Prune link %d->%d\n", last->id, curr->id);
@@ -1245,7 +1245,7 @@ void prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, i
 		curr->in[j++] = curr->in[i];
 	}
 	curr->n_in = j;
-	return;
+	return 1;
     }
 
     vis[(*nvis)++] = curr->id;
@@ -1258,17 +1258,19 @@ void prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, i
 	goto tail_loop;
     }
 
-    int i;
+    int i, r = 0;
     for (i = 0; i < curr->n_out; i++)
-	prune_extra_recurse(g, curr, g->node[curr->out[i]->n[1]], end, other_path, vis, nvis);
+	r |= prune_extra_recurse(g, curr, g->node[curr->out[i]->n[1]], end, other_path, vis, nvis);
+
+    return r;
 }
 
 // Hunt through path looking for branch points that stray from the path.
 // When found, check if these could lead to other other path forming
 // an second (inner) bubble.
-void prune_extra_bubbles(dgraph_t *g, node_t **path, int np, node_t *n_end, int other_path,
+int prune_extra_bubbles(dgraph_t *g, node_t **path, int np, node_t *n_end, int other_path,
 			 int *vis, int *nvis) {
-    int i, j;
+    int i, j, r = 0;
     int p_id = path[0]->visited;
 
     for (i = np-1; i >= 0; i--) {
@@ -1280,9 +1282,11 @@ void prune_extra_bubbles(dgraph_t *g, node_t **path, int np, node_t *n_end, int 
 	    if ((n2->visited & ~(1<<30)) == (p_id & ~(1<<30)) || n2->id == n_end->id)
 		continue;
 	    //fprintf(stderr, "Check branch on path %d at %d -> %d\n", p_id, n->id, n2->id);
-	    prune_extra_recurse(g, n, n2, n_end, other_path, vis, nvis);
+	    r |= prune_extra_recurse(g, n, n2, n_end, other_path, vis, nvis);
 	}
     }
+
+    return r;
 }
 
 void ksw_print_aln(FILE *fp, int len1, char *seq1, int len2, char *seq2, int ncigar, uint32_t *cigar) {
@@ -1460,8 +1464,10 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     // of the world.
 
     if (np1 && np2) {
-	prune_extra_bubbles(g, path1, np1, n_end, path2[0]->visited, vis, nvis);
-	prune_extra_bubbles(g, path2, np2, n_end, path1[0]->visited, vis, nvis);
+	if (prune_extra_bubbles(g, path1, np1, n_end, path2[0]->visited, vis, nvis))
+	    return -1;
+	if (prune_extra_bubbles(g, path2, np2, n_end, path1[0]->visited, vis, nvis))
+	    return -1;
     }
 
     if (!np1 && !np2) {
@@ -1904,7 +1910,10 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 		//rewind_paths(g, &head, merge_id, n);
 
 		// Note this could form a loop, but if so it gets broken for us.
-		node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis);
+		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis) < 0) {
+		    ret = -1;
+		    goto err;
+		}
 
 		// FIXME: merge forks.
 		// Test: just cull one instead.
@@ -1976,7 +1985,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
     return ret;
 }
 
-void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
+int find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
     int i, found;
     // One for this loop and 1 each for the two prune_extra_bubbles loops
     int *v = malloc(g->nnodes*3 * sizeof(int)), nv = 0;
@@ -1995,6 +2004,8 @@ void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
 
 		nv = 0;
 		int b = find_bubble_from2(g, i, use_ref, min_depth, v, &nv);
+		if (b < 0)
+		    return -1;
 
 		// Only clear the nodes that we visited.
 		for (j = 0; j < nv; j++)
@@ -2010,6 +2021,7 @@ void find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
     } while (found);
 
     free(v);
+    return 0;
 }
 
 void prune_edges(dgraph_t *g, int min_count) {
@@ -5578,6 +5590,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     trim_adapters(haps, nhaps, "adapter.fa", ADAPTER_KMER, 10);
 
  bigger_kmer:
+    if (kmer > MAX_KMER)
+	goto err;
 
     // If our mapped sequences can be processed with a sensible kmer,
     // but the unmapped cannot, then maybe it's just the unmapped is
@@ -5620,7 +5634,13 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     //prune_edges(g, 2);
 
     // Merge bubbles excluding reference
-    find_bubbles(g, 0, 10);
+    if (find_bubbles(g, 0, 10) < 0) {
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+	g = NULL;
+	goto err;
+    }
     if (loop_check(g, 0)) {
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER)
@@ -5628,7 +5648,14 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	g = NULL;
 	goto err;
     }
-    find_bubbles(g, 0, 2);
+    if (find_bubbles(g, 0, 2) < 0) {
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+
+	g = NULL;
+	goto err;
+    }
     if (loop_check(g, 0)) {
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER)
@@ -5727,7 +5754,14 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	ref = cons;
 
     // Now also merge in reference bubbles
-    find_bubbles(g, 1, 0);
+    if (find_bubbles(g, 1, 0) < 0) {
+	graph_destroy(g);
+	if ((kmer += 10) < MAX_KMER)
+	    goto bigger_kmer;
+
+	g = NULL;
+	goto err;
+    }
     assert(loop_check(g, 0) == 0);
 
     graph2dot(g, "_h.dot", 0);
@@ -5760,9 +5794,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	    cons1 = cons2 = NULL;
 	    free_haps(cons, 1); cons = NULL;
 	    free_haps(ref_, 1); ref_ = NULL;
-	    goto bigger_kmer;
 	}
-	find_bubbles(g, 1, 0);
+	if (find_bubbles(g, 1, 0) < 0)
+	    if ((kmer += 10) < MAX_KMER)
+		goto bigger_kmer;
     }
 
     // Map the graph to the reference.  We previously did this by
@@ -5801,15 +5836,16 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	unmapped += (new_ncig[i] == 0);
     }
 
-//    Not helpful yet - needs more work.
-//
-//    int orig_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, NULL, NULL, 15);
-//    int new_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, new_cig, new_ncig, 15);
-//
-//    fprintf(stderr, "Max snp change from %d to %d\n", orig_max_snp, new_max_snp);
-//
-//    // reject only on newly appearing excessively long deletions
-//    if (new_max_snp - orig_max_snp >= 10) goto err;
+#if 0
+    // Not helpful yet - needs more work.
+    int orig_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, NULL, NULL, 15);
+    int new_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, new_cig, new_ncig, 15);
+
+    fprintf(stderr, "Max snp change from %d to %d\n", orig_max_snp, new_max_snp);
+
+    // reject only on newly appearing excessively long deletions
+    if (new_max_snp - orig_max_snp >= 10) goto err;
+#endif
 
 //#define CHECK_DEPTH
 #ifdef CHECK_DEPTH
