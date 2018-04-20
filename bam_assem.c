@@ -70,6 +70,10 @@ appropriate location within the string.
 #define GOPEN 5
 #define GEXT  1
 
+#define GOPEN_REF 5
+//#define GOPEN_REF 3
+#define GEXT_REF  1
+
 // Use most frequent 95% of words for error correcting.
 #define CORRECT_PERC 0.1
 
@@ -167,10 +171,14 @@ typedef unsigned char uc;
 // A vs AC ambig or A* ambig, the AC scores higher.  Thus by
 // elimination pads preferentially align to A* than AC.
 int8_t X128[128][128];
-void init_X128_score(int mis, int mat) {
+int8_t X128_ref[128][128];
+void init_X128_score(int8_t X128[128][128], int mis_base, int mis, int mat) {
     init_base_val();
 
-    memset(X128, 0, 128*128*sizeof(X128[0][0])); // why 0 and not mis?
+    // This works well as 0 for seq vs seq alignments,
+    // but may be best as eg -3 or -4 for cons vs ref in order
+    // to get neighbouring snps labelled as compound indels.
+    memset(X128, mis_base, 128*128*sizeof(X128[0][0]));
     int i, j;
 
     // Matches
@@ -198,6 +206,8 @@ void init_X128_score(int mis, int mat) {
 	for (j = 0; j < 11; j++) {
 	    X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis;
 	    X128[tolower("AMRWCSYGKTN"[i])][(uc)"AMRWCSYGKTN"[j]] = mis;
+	    //X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis-1;
+	    //X128[tolower("AMRWCSYGKTN"[i])][(uc)"AMRWCSYGKTN"[j]] = mis-1;
 	    // A* vs C* is a partial match (pad wise). How to score?
 	    X128[tolower("AMRWCSYGKTN"[i])][tolower("AMRWCSYGKTN"[j])] = mis/2;
 	}
@@ -207,6 +217,9 @@ void init_X128_score(int mis, int mat) {
 	X128[(uc)"ACGT"[i]][tolower("ACGT"[i])] = mat/2-1;
 	X128[tolower("ACGT"[i])][(uc)"ACGT"[i]] = mat/2-1;
 	X128[tolower("ACGT"[i])][tolower("ACGT"[i])] = mat/2-1;
+	//X128[(uc)"ACGT"[i]][tolower("ACGT"[i])] = mat/2+1;
+	//X128[tolower("ACGT"[i])][(uc)"ACGT"[i]] = mat/2+1;
+	//X128[tolower("ACGT"[i])][tolower("ACGT"[i])] = mat/2+1;
     }
 
     for (i = 0; i < 3; i++) {
@@ -1391,7 +1404,8 @@ int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32
 
 // Node n_end has parents p1 and p2 which meet up again at some common
 // node n_start.  Find n_start.
-int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int *vis, int *nvis) {
+int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int *vis, int *nvis,
+			 int use_ref) {
     node_t **path1 = malloc(g->nnodes * sizeof(node_t *));
     node_t **path2 = malloc(g->nnodes * sizeof(node_t *));
     int np1 = 0, np2 = 0, i, j;
@@ -1533,12 +1547,20 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     len1-=g->kmer-1;
     len2-=g->kmer-1;
 #endif
-    ksw_global_end(len1, (uint8_t *)vs1, len2, (uint8_t *)vs2,
-		   128, (int8_t *)X128, GOPEN, GEXT, 0,
-		   //128, (int8_t *)X128, 5, 1, 0,
-		   &ncigar, &cigar,  1,1,1,1);
+    fprintf(stderr, "use_ref=%d\n%.*s\n%.*s\n", use_ref, len1, vs1, len2, vs2);
+    int s;
+    fprintf(stderr, "X128[A][G]=%d,%d mat=%d\n", X128['A']['G'], X128['G']['A'], X128['A']['A']);
+    if (use_ref)
+	s=ksw_global_end(len1, (uint8_t *)vs1, len2, (uint8_t *)vs2,
+			 128, (int8_t *)X128_ref, GOPEN_REF, GEXT_REF, 0,
+			 &ncigar, &cigar,  1,1,1,1);
+    else
+	s=ksw_global_end(len1, (uint8_t *)vs1, len2, (uint8_t *)vs2,
+			 128, (int8_t *)X128, GOPEN, GEXT, 0,
+			 &ncigar, &cigar,  1,1,1,1);
+    fprintf(stderr, "Score=%d\n", s);
 
-    //ksw_print_aln(stderr, len1, vs1, len2, vs2, ncigar, cigar);
+    ksw_print_aln(stderr, len1, vs1, len2, vs2, ncigar, cigar);
 #ifdef SHRINK_ALIGN
     len1+=g->kmer-1;
     len2+=g->kmer-1;
@@ -1910,7 +1932,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 		//rewind_paths(g, &head, merge_id, n);
 
 		// Note this could form a loop, but if so it gets broken for us.
-		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis) < 0) {
+		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis, use_ref) < 0) {
 		    ret = -1;
 		    goto err;
 		}
@@ -2829,7 +2851,6 @@ int graph2dot_simple(dgraph_t *g, char *fn, int min_count) {
 
 	if (n->n_in != 1 || n->n_out > 1 ||
 	    (n->n_in == 1 && g->node[n->in[0]->n[1]]->n_out != 1)) {
-	    fprintf(stderr, "Interesting node %d = %d\n", nstart, n->id);
 	    start[nstart] = n->id;
 	    nidx[n->id] = nstart++;
 	}
@@ -2862,7 +2883,17 @@ int graph2dot_simple(dgraph_t *g, char *fn, int min_count) {
 	}
 	seq[seq_len++] = 0;
 
-	fprintf(fp, "  n_%d [label=\"%s\"]\n", i, seq);
+	fprintf(fp, "  n_%d [label=\"", i);
+	char *sp = seq;
+	int len = strlen(seq);
+	while (len > 0) {
+	    fprintf(fp, "%.*s", len>20?20:len, sp);
+	    len -= 20;
+	    sp += 20;
+	    if (len)
+		fprintf(fp, "\\n");
+	}
+	fprintf(fp, "\"]\n");
 	for (j = 0; j < n->n_out; j++) {
 	    if (g->node[n->out[j]->n[1]]->count < min_count)
 		continue;
@@ -3494,7 +3525,7 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
 		   //128, (int8_t *)X128, GOPEN, GEXT, 0,
 		   128, (int8_t *)X128, 3, 1, 0, // more generous with permitting indels
 		   &ncigar, &cigar, 0, 0, 0, 0);
-    ksw_print_aln(stderr, len, ref, clen, cons, ncigar, cigar);
+    //ksw_print_aln(stderr, len, ref, clen, cons, ncigar, cigar);
 
     uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
     uint8_t *baq_i = calloc(1, len); // boolean; 1 if is indel
@@ -5070,46 +5101,14 @@ int compute_consensus_above(dgraph_t *g, char *ref, int window) {
     int cons_len = strlen(cons);
     int ref_len = strlen(ref);
 
-#if 0
-    int *S = malloc((cons_len + ref_len) * sizeof(*S));
-    align_ss(cons, ref, cons_len, ref_len, 0, 0, X128, 4,1, S, 1,1,1,1);
-    //display_ss(cons, ref, cons_len, ref_len, S, 0, 0);
-
-    int x1 = 0, x2 = 0, *S2 = S;
-    while (x1 < cons_len || x2 < ref_len) {
-	int op = *S2++;
-	if (op == 0) {
-	    // Match
-	    //fprintf(stderr, "%c %c @ %d %d\n", cons[x1], ref[x2], cid[x1], x2);
-	    g->node[cid[x1]]->pos=x2;
-	    g->node[cid[x1]]->ins=0;
-	    x1++, x2++;
-	} else if (op < 0) {
-	    // Insertion in consensus
-	    int ival = 0;
-	    while (op++) {
-		g->node[cid[x1]]->pos=x2;
-		g->node[cid[x1]]->ins=++ival;
-		//fprintf(stderr, "%c - @ %d %d.%d\n", cons[x1], cid[x1], x2, ival);
-		x1++;
-	    }
-	} else if (op > 0) {
-	    // Deletion in consensus
-	    while (op--) {
-		//fprintf(stderr, "- %c () %d\n", ref[x2], x2);
-		x2++;
-	    }
-	}
-    }
-
-    free(S);
-    int snp_count = 0;
-#else
     uint32_t *cigar = NULL;
     int ncigar = 0;
     ksw_global_end(cons_len, (uint8_t *)cons, ref_len, (uint8_t *)ref,
+		   //128, (int8_t *)X128, GOPEN_REF, GEXT_REF, 0,
 		   128, (int8_t *)X128, 4,1, 0,
 		   &ncigar, &cigar, 0,0,0,0);
+
+    //ksw_print_aln(stderr, cons_len, cons, ref_len, ref, ncigar, cigar);
 
     int snp_count = ksw_snp_count(cons_len, cons, ref_len, ref, ncigar, cigar, window);
 
@@ -5166,7 +5165,6 @@ int compute_consensus_above(dgraph_t *g, char *ref, int window) {
     }
 
     free(cigar);
-#endif
     free(seq);
     free(nnum);
 
@@ -5542,7 +5540,9 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     }
 #endif
 
-    init_X128_score(-4,4);
+    init_X128_score(X128,      0,-4,4); // for seqs against each other to form pileup
+    //init_X128_score(X128_ref, -3,-4,4); // for seq pileup against reference
+    init_X128_score(X128_ref, 0,-4,4); // for seq pileup against reference
 
     // Convert BAMS to seqs instead, so we can perform edits on them
     // while retaining the original data.
@@ -5807,10 +5807,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // through the graph representing the bulk of the data and then
     // align that as a whole to the reference.
     number_nodes_above(g);
-    if (compute_consensus_above(g, ref->seq, window) - max_snp >= 2) { // eg 3 in 15
+    if (compute_consensus_above(g, ref->seq, window) - max_snp >= 2) { // eg 2 in 15
 	// Reject as too many extra clustered variants.
 	// Likely we've made an error somewhere.
 
+	fprintf(stderr, "Rejecting realignment as too many new SNPs\n");
 	goto err; // FIXME: done later now instead, but this is still useful? Why?
 
 	// FIXME: still not het aware.  Unsure why consensus doesn't include het locations.

@@ -69,25 +69,22 @@
 // FIXME: ideally we should have MARGIN+STR size, so an indel at pos
 // 1234 in an STR spanning 1234 to 1250 should consider the problem to
 // be 1234-MARGIN to 1250+MARGIN instead of to 1234+MARGIN.
-#define MARGIN 100       // margin around suspect regions
-#define CON_MARGIN 100   // margin to add on to consensus when realigning
+#define MARGIN 150       // margin around suspect regions
+#define CON_MARGIN 150   // margin to add on to consensus when realigning
+#define MAX_SHIFT 500    // NB: successive problems may move the same reads multiple times
 
 #define MAX_REG 2000     // maximum size of region to realign
 
 #define MAX_READS 2000   // maximum number of reads
 
-#define MIN_INDEL 2      // FIXME: parameterise
+#define MIN_INDEL 1      // FIXME: parameterise
 #define MAX_DEPTH 500   // FIXME: parameterise
-
-// Prevalence of low mapping quality, > PERC => store all
-// Lower => larger files
-#define LOW_MQUAL_PERC 0.5
 
 // Amount of variable sized insertion
 #define INS_LEN_PERC 0.1
 
 // Percentage of seqs with large soft-clips
-#define CLIP_PERC 0.1
+#define CLIP_PERC 0.2
 
 // Amount of over-depth to consider this as as suspect region
 #define OVER_DEPTH 3.0
@@ -133,7 +130,6 @@ typedef struct {
     char *region;
     int verbose;
     int margin, cons_margin;
-    double low_mqual_perc;
     double clip_perc;
     double ins_len_perc;
     double over_depth;
@@ -616,7 +612,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    start_reg = end_reg = n_plp ? plp[0].b->core.pos : 0;
 	    start_ovl = end_ovl = 0;
 	    status = S_OK;
-	    flush_pos = MIN(start_reg, last_pos ? last_pos : start_reg) - p->margin;
+	    flush_pos = MIN(start_reg, last_pos ? last_pos : start_reg) - p->margin - MAX_SHIFT;
 	    goto too_deep;
 	}
 
@@ -800,7 +796,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		status = S_PROB;
 	    } else {
 		// Periodic flush here of reads ending before  pos-MARGIN
-		flush_pos = left_most - p->margin;
+		flush_pos = left_most - p->margin - MAX_SHIFT;
 	    }
 	    break;
 
@@ -827,7 +823,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		    start_reg = end_reg = left_most;
 		    start_ovl = end_ovl = 0;
 		    status = S_OK;
-		    flush_pos = left_most - p->margin;
+		    flush_pos = left_most - p->margin - MAX_SHIFT;
 		    nreads = 0;
 		}
 	    }
@@ -943,7 +939,6 @@ void usage(FILE *fp) {
     fprintf(fp, "-c int            Consensus generation margin surrounding suspect regions\n");
     fprintf(fp, "-P float          Suspect if depth locally >= [%.1f] times deeper than expected\n", OVER_DEPTH);
     fprintf(fp, "-C float          Suspect if >= [%.2f] reads have soft-clipping\n", CLIP_PERC);
-    fprintf(fp, "-M float          Suspect if >= [%.2f] reads have low mapping quality\n", LOW_MQUAL_PERC);
     fprintf(fp, "-Z float          Suspect if >= [%.2f] indel sizes do not fit bi-modal dist.\n", INS_LEN_PERC);
     fprintf(fp, "-V float          Suspect if <  [%.2f] reads span indel\n", INDEL_OVERLAP_PERC);
     fprintf(fp, "-X int            Whether to add primary (val&1) or secondary (val&2) consensus to graph\n");
@@ -969,7 +964,6 @@ int main(int argc, char **argv) {
 	.margin        = MARGIN,            // -m
 	.cons_margin   = CON_MARGIN,        // -c
         .clip_perc     = CLIP_PERC,         // -C
-        .low_mqual_perc= LOW_MQUAL_PERC,    // -M
         .ins_len_perc  = INS_LEN_PERC,      // -Z
         .over_depth    = OVER_DEPTH,        // -P
         .indel_ov_perc = INDEL_OVERLAP_PERC,// -V
@@ -982,7 +976,7 @@ int main(int argc, char **argv) {
 	.max_reg       = MAX_REG,           // -N
     };
 
-    while ((opt = getopt(argc, argv, "I:O:m:c:vM:Z:P:V:r:R:uX:d:i:n:N:")) != -1) {
+    while ((opt = getopt(argc, argv, "I:O:m:c:vC:vZ:P:V:r:R:uX:d:i:n:N:")) != -1) {
 	switch (opt) {
 	case 'u':
 	    params.clevel = 0;
@@ -1017,10 +1011,6 @@ int main(int argc, char **argv) {
 
         case 'C':
             params.clip_perc = atof(optarg);
-            break;
-
-        case 'M':
-            params.low_mqual_perc = atof(optarg);
             break;
 
         case 'Z':
