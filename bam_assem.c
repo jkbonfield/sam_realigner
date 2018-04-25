@@ -71,7 +71,6 @@ appropriate location within the string.
 #define GEXT  1
 
 #define GOPEN_REF 5
-//#define GOPEN_REF 3
 #define GEXT_REF  1
 
 // Use most frequent 95% of words for error correcting.
@@ -5541,8 +5540,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 #endif
 
     init_X128_score(X128,      0,-4,4); // for seqs against each other to form pileup
-    //init_X128_score(X128_ref, -3,-4,4); // for seq pileup against reference
-    init_X128_score(X128_ref, 0,-4,4); // for seq pileup against reference
+    init_X128_score(X128_ref, -3,-3,1); // for seq pileup against reference
 
     // Convert BAMS to seqs instead, so we can perform edits on them
     // while retaining the original data.
