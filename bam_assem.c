@@ -3862,6 +3862,253 @@ int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, in
     return 0;
 }
 
+// After a realignment, produce consensus from cigar strings to get indel
+// locations and consensus.  Couple this with simple STR detection to
+// adjust qualities in regions where heterozygous indels coincide with
+// STRs.
+int calc_BAQ(bam1_t **bams, int nbam, int ref_start, int ref_len, char *ref) {
+    int i, j;
+    int (*cons)[5] = calloc(ref_len, sizeof(*cons));
+    int *indel = calloc(ref_len, sizeof(*indel));
+    if (!cons || !indel)
+	return -1;
+
+    //             1 2   4       8
+    //             A C   G       T
+    int L[16] = {4,0,1,4,2,4,4,4,3,4,4,4,4,4,4,4}; // bam_seqi to 0,1,2,3
+
+    // Compute a basic consensus and indel marker.
+    for (i = 0; i < nbam; i++) {
+	bam1_t *b = bams[i];
+	uint32_t *cig = bam_get_cigar(b), cig_ind = 0;
+	uint32_t ncig = b->core.n_cigar;
+	uint64_t rp = b->core.pos, sp = 0;
+	uint8_t *seq = bam_get_seq(b);
+
+	for (j = 0; j < ncig; j++) {
+	    uint32_t op = cig[cig_ind] & BAM_CIGAR_MASK;
+	    uint32_t oplen = cig[cig_ind++] >> BAM_CIGAR_SHIFT;
+
+	    switch (op) {
+	    case BAM_CMATCH:
+	    case BAM_CEQUAL:
+	    case BAM_CDIFF:
+		while (oplen--) {
+		    if (rp >= ref_start && rp < ref_start + ref_len)
+			cons[rp-ref_start][L[bam_seqi(seq, sp)]]++;
+		    sp++;
+		    rp++;
+		}
+		break;
+
+	    case BAM_CINS:
+		if (rp >= ref_start && rp < ref_start + ref_len)
+		    indel[rp-ref_start]++;
+		if (rp > ref_start && rp <= ref_start + ref_len)
+		    indel[rp-ref_start-1]++;
+		sp += oplen;
+		break;
+
+	    case BAM_CSOFT_CLIP:
+		sp += oplen;
+		break;
+
+	    case BAM_CDEL:
+		while (oplen--) {
+		    if (rp >= ref_start && rp < ref_start + ref_len)
+			indel[rp-ref_start]++;
+		    sp++;
+		    rp++;
+		}
+		break;
+
+	    case BAM_CREF_SKIP:
+		rp += oplen;
+		break;
+	    }
+	}
+    }
+
+    // Now combine to get consensus string + bit status per pos.
+    // 1 STR in cons
+    // 2 STR in ref
+    // 4 homozygous indel
+    // 8 heterozygous indel
+    char *seq = malloc(ref_len+1);
+    uint8_t *str_status = calloc(ref_len, 1);
+    if (!seq || !str_status)
+	return -1;
+    
+    for (i = 0; i < ref_len; i++) {
+	int c = 0, b = 4, j = 0;
+	for (j = 0; j < 4; j++) {
+	    if (c < cons[i][j]) {
+		c = cons[i][j];
+		b = j;
+	    }
+	}
+	seq[i] = "ACGTN"[b];
+	if (indel[i] >= .9*c)
+	    str_status[i] |= 4; // hom indel present
+	else if (indel[i] >= .1*c)
+	    str_status[i] |= 8; // het indel present
+    }
+    seq[i] = 0;
+
+    // Find STRs within seq.
+    rep_ele *reps, *elt, *tmp;
+    reps = find_STR(seq, ref_len, 0);
+#define STR_MARGIN 5
+    DL_FOREACH_SAFE(reps, elt, tmp) {
+	int left  = elt->start-STR_MARGIN < 0 ? 0 : elt->start-STR_MARGIN;
+	int right = elt->end+STR_MARGIN >= ref_len ? ref_len-1 : elt->end+STR_MARGIN;
+
+	for (i = left; i <= right; i++)
+	    if (str_status[i])
+		break;
+
+	if (i <= right) {
+	    for (i = left; i <= right; i++)
+		if (seq[i] != 'N') str_status[i] |= 1; // cons
+	}
+
+	DL_DELETE(reps, elt);
+	free(elt);
+    }
+
+    // Find STRs within ref
+    if (ref) {
+	reps = find_STR(ref, ref_len, 0);
+	DL_FOREACH_SAFE(reps, elt, tmp) {
+	    int left  = elt->start-STR_MARGIN < 0 ? 0 : elt->start-STR_MARGIN;
+	    int right = elt->end+STR_MARGIN >= ref_len ? ref_len-1 : elt->end+STR_MARGIN;
+
+	    for (i = left; i <= right; i++)
+		if (str_status[i])
+		    break;
+
+	    if (i <= right) {
+		for (i = left; i <= right; i++)
+		    str_status[i] |= 2;
+	    }
+
+	    DL_DELETE(reps, elt);
+	    free(elt);
+	}
+    }
+
+//    for (i = 0; i < ref_len; i++) {
+//	fprintf(stderr, "%5d %c %x %d  %d %d %d %d\n", i, ref[i], str_status[i], indel[i], cons[i][0], cons[i][1], cons[i][2], cons[i][3]);
+//    }
+
+    uint8_t nq[256];
+    for (i = 0; i < 256; i++) {
+	nq[i] = i>7 ?i-5 : 2;
+    }
+    // old:    37/69, 30/137    68/218, 46/355
+    
+    // MARGIN 2
+    // *= .7:  36/74, 33/138    62/220, 52/351
+    // -5      37/72, 33/137    64/215, 52/349 // single subtract
+    // -10     36/74, 33/138    61/224, 51/351
+    // -7-7    35/75, 32/138    60/220, 53/351 // sub, and again if het-indel
+    // -5-5    37/72, 33/137    62/215, 52/351
+    // -5-5,+T 35/74, 30/139    59/225, 47/359 // with old STR trim baq too and calc_baq always
+    // +T-5-5  37/70, 30/137    62/219, 47/355 // with old STR trim, and calq_baq on err only
+    // +T-7-7  36/72, 30/138    61/220, 47/355 // "
+    // -T-5-5  37/71, 32/135    62/214, 51/353 // no old STR trimming at all; STR helps FP indel
+    // -T-7-7  35/74, 32/136    60/219, 52/354 // "
+    //
+    // MARGIN 0
+    // -T-5-5   37/69, 32/135    64/214, 52/353
+    //
+    // MARGIN 5
+//>>// -T-5-5   37/72, 32/135    60/215, 51/353
+    // -T-5-55  36/74, 32/134    57/221, 51/353 // indel=nq[x] and het_indel=nq[nq[nq[x]]
+    // -T-5-5+2 37/72, 32/135    61.215, 51/353 // ie T-5-3
+    // -T-5-5-5 37/72, 32/135    60/215, 51/353 // indel, +het, +nospan; identical to T-5-5
+    // -T-7-7   36/76, 32/136    56/226, 51/354
+    
+    nq[0] = 0; nq[1] = 1;
+
+    // Now reprocess again, identifying bases in reads that neighbour hard STRs.
+    for (i = 0; i < nbam; i++) {
+	bam1_t *b = bams[i];
+	uint32_t *cig = bam_get_cigar(b), cig_ind = 0;
+	uint32_t ncig = b->core.n_cigar;
+	uint64_t rp = b->core.pos, sp = 0;
+	uint8_t *seq = bam_get_seq(b);
+	uint8_t *qual = bam_get_qual(b);
+
+	for (j = 0; j < ncig; j++) {
+	    uint32_t op = cig[cig_ind] & BAM_CIGAR_MASK;
+	    uint32_t oplen = cig[cig_ind++] >> BAM_CIGAR_SHIFT;
+
+	    switch (op) {
+	    case BAM_CMATCH:
+	    case BAM_CEQUAL:
+	    case BAM_CDIFF:
+		while (oplen--) {
+		    if (rp >= ref_start && rp < ref_start + ref_len) {
+			if ((str_status[rp-ref_start] & 3) && sp < b->core.l_qseq) {
+			    qual[sp] = nq[qual[sp]];
+			    if (str_status[rp-ref_start] & 8)
+				qual[sp] = nq[qual[sp]];
+			}
+		    }
+		    sp++;
+		    rp++;
+		}
+		break;
+
+	    case BAM_CINS:
+		if (rp >= ref_start && rp < ref_start + ref_len) {
+		    if (str_status[rp-ref_start] & 3) {
+			while (oplen-- && sp < b->core.l_qseq) {
+			    qual[sp] = nq[qual[sp]];
+			    if (str_status[rp-ref_start] & 8)
+				qual[sp] = nq[qual[sp]];
+			    sp++;
+			}
+			oplen = 0;
+		    }
+		}
+		sp += oplen;
+		break;
+
+	    case BAM_CSOFT_CLIP:
+		sp += oplen;
+		break;
+
+	    case BAM_CDEL:
+		while (oplen--) {
+		    if (rp >= ref_start && rp < ref_start + ref_len) {
+			if ((str_status[rp-ref_start] & 3) && sp < b->core.l_qseq) {
+			    qual[sp] = nq[qual[sp]];
+			    if (str_status[rp-ref_start] & 8)
+				qual[sp] = nq[qual[sp]];
+			}
+		    }
+		    sp++;
+		    rp++;
+		}
+		break;
+
+	    case BAM_CREF_SKIP:
+		rp += oplen;
+		break;
+	    }
+	}
+    }
+
+    free(cons);
+    free(indel);
+    free(seq);
+    free(str_status);
+
+    return 0;
+}
+
 int int64_compar(const void *vp1, const void *vp2) {
     return ((*(const uint64_t *)vp2)>>32) - ((*(const uint64_t *)vp1)>>32);
 }
@@ -5843,10 +6090,10 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     fprintf(stderr, "Max snp change from %d to %d\n", orig_max_snp, new_max_snp);
 
     // reject only on newly appearing excessively long deletions
-    if (new_max_snp - orig_max_snp >= 10) goto err;
+    if (new_max_snp - orig_max_snp >= 5) goto err;
 #endif
 
-//#define CHECK_DEPTH
+//#define CHECK_DEPTH // seem detrimental overall.
 #ifdef CHECK_DEPTH
     if ((nhaps-unmapped) >= .7*(nhaps-orig_unmapped))
 #endif
@@ -5870,10 +6117,12 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     free(new_ncig);
 
     // Why g->kmer*2 for cons?
-    trim_cigar_STR(ref->seq+g->kmer, shift, cons->seq+g->kmer*2-1, bams, nhaps, new_pos);
+    //trim_cigar_STR(ref->seq+g->kmer, shift, cons->seq+g->kmer*2-1, bams, nhaps, new_pos);
 
     ret = 0;
  err:
+    //if (ret != 0)
+    calc_BAQ(bams, nhaps, ref_start, ref_len, ref_seq);
 
 #ifdef REVERSE
     // And fixup new_pos too
