@@ -13,10 +13,6 @@ all: $(ALL)
 .c.o:
 	$(CC) $(CFLAGS) $(DEFINES) $(INCLUDES) -c $< -o $@
 
-# OBJS1=assem.o hash_table.o pooled_alloc.o string_alloc.o align_ss.o align_sv.o
-# assem: $(OBJS1)
-# 	$(CC) -o $@ $(OBJS) $(LDFLAGS) $(LIBS)
-
 OBJS=hash_table.o pooled_alloc.o string_alloc.o str_finder.o ksw.o
 assem_bam_k3: $(OBJS) assem_bam3_3.o
 	$(CC) -o $@ $(OBJS) assem_bam3_3.o $(LDFLAGS) $(LIBS)

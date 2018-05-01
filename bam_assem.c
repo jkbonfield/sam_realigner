@@ -2,7 +2,7 @@
 // as a standalone tool.
 
 
-// cc -g -I$HOME/work/samtools_master/htslib assem_bam.c hash_table.c pooled_alloc.c string_alloc.c align_ss.c -DKMER=70 -lm -L$HOME/work/samtools_master/htslib -lhts -lz -pthread
+// cc -g -I$HOME/work/samtools_master/htslib assem_bam.c hash_table.c pooled_alloc.c string_alloc.c -DKMER=70 -lm -L$HOME/work/samtools_master/htslib -lhts -lz -pthread
 
 // ./a.out a.fasta ref.fasta > a.sam && sfdp -Gstart=24 -Gmaxiter=10 -GK=.5 -Gsplines=true -Efontsize=24 -Nshape=point  g.dot -Tpdf -o g.pdf; evince g.pdf
 
@@ -86,60 +86,6 @@ appropriate location within the string.
 // Appropriate when summing kmer-qual over all matching kmers.
 // #define CORRECT_MIN_CONF 30
 // #define CORRECT_MULT 5
-
-
-//-----------------------------------------------------------------------------
-// Khash interface to kmer indexing, with variable sized kmer.
-//
-// Khash's string interface is strictly nul terminated char *.  We wish to
-// iterate over a string kmer bases at a time without having to nul terminate
-// or take copies of the string.  We do this by defining our key to be a small
-// structure.
-
-typedef struct node_t node_t;
-
-typedef struct {
-    // add struct kmer_key *next;   May replace node->hi / node->n_hi array?
-    const char *key;
-    int key_len;
-} kmer_key;
-
-// Variable sized non-terminated keys
-#define KHASH_MAP_INIT_KMER(name, khval_t)				\
-    KHASH_INIT(name, kmer_key*, khval_t, 1, kh_kmer_hash_func, kh_kmer_hash_equal)
-
-// Requires fixed kmer_key size
-static inline int kh_kmer_hash_equal(const kmer_key *a, const kmer_key *b) {
-    return memcmp(a->key, b->key, a->key_len);
-}
-
-static inline khint_t kh_kmer_hash_func(const kmer_key *k) {
-    const char *s = k->key;
-    khint_t h, i;
-    for (h = i = 0; i < k->key_len; i++) h = (h << 5) - h + (khint_t)s[i];
-    return h;
-}
-
-//---------------------------------------------------------------------------
-// Khash interface to kmer indexing, with compile-time fixed kmer.
-//
-// We have a dedicated hash_equal and hash_func per kmer value (templated
-// on size), along with associated KHASH_MAP_INIT calls to use these.
-
-#define KHASH_KMER_INIT(N) \
-    /* Requires fixed kmer_key size */ \
-    static inline int kh_kmer##N##_hash_equal(const char *a, const char *b) { \
-        return memcmp(a, b, N) == 0; \
-    } \
-    \
-    static inline khint_t kh_kmer##N##_hash_func(const char *s) { \
-        khint_t h, i; \
-        for (h = i = 0; i < N; i++) h = (h << 5) - h + (khint_t)s[i]; \
-        return h; \
-    }
-
-#define KHASH_MAP_INIT_KMER_N(name, khval_t, N) \
-    KHASH_INIT(name##N, char*, khval_t, 1, kh_kmer##N##_hash_func, kh_kmer##N##_hash_equal)
 
 //---------------------------------------------------------------------------
 
@@ -265,60 +211,6 @@ char *vec2seq(int (*v)[5], int len) {
 
 //---------------------------------------------------------------------------
 // Interface to Heng Li's ksw code
-
-#if 0
-// Left here for the commented out merge_tips code, which still uses the old
-// interface.
-int align_ss(char *A, char *B, int len_A, int len_B, int low, int high,
-	     int8_t W[][128], int G, int H, int *S, int s1, int s2, int e1, int e2) {
-    uint32_t *cigar = NULL;
-    int ncigar = 0, score, i, j, k;
-
-    score = ksw_global_end(len_A, A, len_B, B, 128, (uint8_t *)W, G, H, 0,
-			   &ncigar, &cigar, !s1, !e1, !s2, !e2);
-
-    i = j = k = 0;
-    S--;
-
-    while (i < len_A || j < len_B) {
-	if (k >= ncigar)
-	    break; // truncated through band?
-	int op = cigar[k] & BAM_CIGAR_MASK;
-	int oplen = cigar[k++] >> BAM_CIGAR_SHIFT;
-
-	switch (op) {
-	case BAM_CMATCH:
-	    while(oplen--) {
-		*++S = 0;
-		i++, j++;
-	    }
-	    break;
-
-	case BAM_CDEL: // in B only
-	    if (oplen) {
-		*++S = oplen;
-		j += oplen;
-	    }
-	    break;
-
-	case BAM_CINS: // in A only
-	    if (oplen) {
-		i += oplen;
-		*++S = -oplen;
-	    }
-	    break;
-
-	default:
-	    abort();
-	}
-    }
-
-    free(cigar);
-    return score;
-}
-#endif
-
-
 typedef struct haps {
     int   pos;
     char *seq;
@@ -543,11 +435,6 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
 	node->hi = realloc(node->hi, (node->n_hi+1) * sizeof(*node->hi));
 	node->hi[node->n_hi++] = hi;
 
-	//khint_t k, ret;
-	//kmer_key kk = {seq, len}; // FIXME: must hang around, so change to global.
-	//k = kh_put(node_hash, g->_node_hash, &kk, &ret);
-	//kh_value(g->_node_hash, k) = node;
-
 //    } else {
 //	node->seq = NULL;
 //	node->len = 0;
@@ -560,11 +447,7 @@ node_t *add_node(dgraph_t *g, char *seq, int len) {
 }
 
 node_t *find_node(dgraph_t *g, char *seq, int len, int add) {
-    //kmer_key kk = {seq, len};
-    //khint_t k = kh_get(node_hash, g->_node_hash, &kk);
-
     HashItem *hi = HashTableSearch(g->node_hash, seq, len);
-    //assert(hi ? k != kh_end(g->_node_hash) : k == kh_end(g->_node_hash));
     if (hi)
 	return (node_t *)hi->data.p;
 
@@ -1348,17 +1231,23 @@ int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32
     int snp = 0;
 
     char *mis = calloc(len2, 1);
-    if (!mis)
+    char *indel = calloc(len2, 1);
+    if (!mis || !indel)
 	return -1;
 
-    int i1 = 0, i2 = 0, i =0;
+#define SNP_WITHIN 20
+
+    int i1 = 0, i2 = 0, i =0, j;
     while (i1 < len1 || i2 < len2) {
 	int op = cigar[i] & BAM_CIGAR_MASK;
 	int oplen = cigar[i] >> BAM_CIGAR_SHIFT;
 	switch(op) {
 	case BAM_CMATCH:
+	case BAM_CEQUAL:
+	case BAM_CDIFF:
 	    while (oplen--) {
-		if (toupper(seq1[i1]) != toupper(seq2[i2]))
+		if (seq1[i1] != 'N' && seq2[i2] != 'N' &&
+		    toupper(seq1[i1]) != toupper(seq2[i2]))
 		    mis[i2]=1;
 		i1++;
 		i2++;
@@ -1369,9 +1258,13 @@ int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32
 
 	case BAM_CINS:
 	    i1 += oplen;
+	    for (j = i2>SNP_WITHIN?i2-SNP_WITHIN:0; j < len2 && j < i2+SNP_WITHIN; j++)
+		indel[j]=1;
 	    break;
 
 	case BAM_CDEL: {
+	    for (j = i2>SNP_WITHIN?i2-SNP_WITHIN:0; j < len2 && j < i2+oplen+SNP_WITHIN; j++)
+		indel[j]=1;
 	    i2 += oplen;
 	    break;
 	}
@@ -1384,18 +1277,21 @@ int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32
     }
 
     for (i2 = 0; i2 < len2 && i2 < window; i2++) {
+	//if (mis[i2] && indel[i2])
 	if (mis[i2])
 	    snp++;
     }
     max_snp = snp;
 
     for (; i2 < len2; i2++) {
+	//snp += (mis[i2] && indel[i2]) - (mis[i2-window] && indel[i2-window]);
 	snp += mis[i2] - mis[i2-window];
 	if (max_snp < snp)
 	    max_snp = snp;
     }
 
     free(mis);
+    free(indel);
 
     fprintf(stderr, "new max snp count %d\n", max_snp);
     return max_snp;
@@ -1784,47 +1680,6 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     return 0;
 }
 
-// Any paths that include 'n' and are below 'n_end' have been
-// merged into n and can be culled.  We also need to clear
-// the visited status for such paths too so we don't detect fake
-// bubbles after merging.
-void rewind_paths(dgraph_t *g, path_t **phead, int n_id, node_t *n_end) {
-    printf("Find redundant paths from %d including node %d\n",
-	   n_end->id, n_id);
-
-    path_t *p, *pnext;
-    for (p = *phead; p; p = pnext) {
-	pnext = p->next;
-
-//	if (p->n)
-//	    printf("alive p=%d", p->n->id);
-//	else
-//	    printf("dead  ");
-	node_t *n = p->pn, *ln = NULL;
-	while (n && n->id != n_id) {
-//	    printf("->%d", n->id);
-	    ln = n;
-	    n = n->n_in ?  g->node[n->in[0]->n[1]] : NULL;
-	}
-//	if (n) printf("->%d", n->id);
-//	printf("\n");
-
-	if (n && n->id == n_id && ln && ln->id == n_end->id) {
-	    printf("    Found path %d->%d .. %d\n", p->n ? p->n->id : -1, p->pn->id, n_id);
-	    // Trundle from p->n/p->pn up to n_end clearing visitor flag
-	    n = p->n ? p->n : p->pn;
-	    while (n && n->id != n_end->id) {
-		printf("Clear visited (was %d) on node %d\n", n->visited, n->id);
-		n->visited = 0;
-		n = n->n_in ?  g->node[n->in[0]->n[1]] : NULL;
-	    }
-
-	    // kill it. Better way needed
-	    p->n = 0;
-	}
-    }
-}
-
 // Breadth first search starting from id.
 // We keep a track of nodes and paths from every fork.
 // As we progress one node at a time per path, we check 'visited'.
@@ -1927,8 +1782,6 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 //		printf("Bubble detected with node %d (%d, %d)\n",
 //		       n->id, merge_id, pn->id);
 		//graph2dot(g, "_before.dot", 0);
-
-		//rewind_paths(g, &head, merge_id, n);
 
 		// Note this could form a loop, but if so it gets broken for us.
 		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis, use_ref) < 0) {
@@ -2043,468 +1896,6 @@ int find_bubbles(dgraph_t *g, int use_ref, int min_depth) {
 
     free(v);
     return 0;
-}
-
-void prune_edges(dgraph_t *g, int min_count) {
-    int i, j, k;
-
-    for (i = 0; i < g->nnodes; i++) {
-	node_t *n = g->node[i];
-	if (n->pruned)
-	    continue;
-
-	for (j = k = 0; j < n->n_in; j++) {
-	    node_t *x = g->node[n->in[j]->n[1]];
-	    if (x->count < min_count) {
-		int k, l;
-		for (k = l = 0; k < x->n_out; k++)
-		    if (x->out[k]->n[1] != n->id)
-			x->out[l++] = x->out[k];
-		x->n_out = l;
-		continue;
-	    }
-	    n->in[k++] = n->in[j];
-	}
-	n->n_in = k;
-
-	for (j = k = 0; j < n->n_out; j++) {
-	    node_t *x = g->node[n->out[j]->n[1]];
-	    if (x->count < min_count) {
-		int k, l;
-		for (k = l = 0; k < x->n_in; k++)
-		    if (x->in[k]->n[1] != n->id)
-			x->in[l++] = x->in[k];
-		x->n_in = l;
-		continue;
-	    }
-	    n->out[k++] = n->out[j];
-	}
-	n->n_out = k;
-
-	validate_graph(g);
-    }
-    validate_graph(g);
-}
-
-int tag_tail_from(dgraph_t *g, int parent, int id) {
-    printf("Check tail at node %d->%d\n", parent, id);
-
-    node_t *n = g->node[id], *l = n;
-    if (n->visited == 't') {
-	printf("Already checked: tail=%d\n", n->is_tail);
-	return n->is_tail;
-    }
-
-    while (n) {
-	printf("\t%d\n", n->id);
-	if (n->n_out == 0) {
-	    int ret;
-	    n->is_tail = 1;
-	    n = g->node[id];
-	    if (n->n_in > 1 && !n->is_head) {
-		printf("TAIL at %d++ ->%d\n", id, n->id);
-		printf("But %d failed incoming check\n", n->id);
-		n = g->node[l->out[0]->n[1]];
-		ret = 0;
-	    } else {
-		printf("TAIL at %d ->%d\n", id, n->id);
-		n = l;
-		ret = 1;
-	    }
-
-	    while (n) {
-		n->is_tail = 1;
-		if (n->n_out != 1)
-		    break;
-		n = g->node[n->out[0]->n[1]];
-	    }
-
-	    return ret;
-	}
-	if (n->visited == 't')
-	    break;
-	n->visited = 't';
-	if (n->n_out > 1)
-	    break;
-
-	n = g->node[n->out[0]->n[1]];
-    }
-
-    int i, t = 1;
-    for (i = 0; i < n->n_out; i++) {
-	int x = tag_tail_from(g, n->id, n->out[i]->n[1]);
-	printf("tag_tail_from %d,%d -> %d\n", n->id, n->out[i]->n[1], x);
-	if (x == 0 || (n->n_in > 1 && !n->is_head)) {
-	    printf("%d->%d: but failed incoming check\n", n->id, n->out[i]->n[1]);
-	    t = 0;
-	} else {
-	    printf("%d->%d: possible tail\n", n->id, n->out[i]->n[1]);
-	}
-    }
-
-    if (t)
-	n->is_tail = 1;
-    printf("%s at %d\n", t ? "tail" : "non-tail", n->id);
-    return t;
-}
-
-void tag_head_from(dgraph_t *g, int parent, int is_head, int id) {
-    node_t *n = g->node[id];
-
-    //printf(">>>%d,%d,%d\n", parent, is_head, id);
-
-    // Walk graph
-    while (n) {
-	n->visited = (n->visited & ~0xff) | 'h';
-	n->visited += 256;
-
-	//printf("Check node %d, visited %d of %d times\n", n->id, n->visited >> 8, n->n_in);
-	if (n->n_in > 1 && (n->visited >> 8) < n->n_in) {
-	    //printf("Stop1 at node %d\n", n->id);
-	    return;
-	}
-	if (n->n_out > 1) {
-	    //printf("Stop2 at node %d\n", n->id);
-	    break;
-	}
-
-	if (is_head) {
-//	    printf("Node %d is hair\n", n->id);
-	    n->is_head = 1;
-	}
-
-	if (n->n_out == 0)
-	    break;
-
-	n = g->node[n->out[0]->n[1]];
-    }
-}
-
-// Recursively find hairs (end points) and tag them so we
-// know which nodes lead to dead ends (ie have no bubbles).
-//
-// FIXME: not bullet proof
-void tag_hairs(dgraph_t *g) {
-    int i;
-    for (i = 0; i < g->nnodes; i++) {
-	if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
-	    tag_head_from(g, -1, 1, i);
-	}
-    }
-
-    for (i = 0; i < g->nnodes; i++) {
-	if (g->node[i]->n_in == 0 && !g->node[i]->pruned) {
-	    printf("Hair start at %d\n", i);
-	    tag_tail_from(g, -1, i);
-	}
-    }
-}
-
-
-#if 0
-// Merge nodes n1 onto n2, with relationships n1->c1 and n2->c2.
-// NB: c2 is unrequired, so not specified as an argument.
-// We are culling node n1, so c1 incoming is removed.
-// (FIXME: see dup1 comments regarding potential duplicated code).
-int merge_head_node(dgraph_t *g, node_t *n1, node_t *n2, node_t *c1) {
-    int i, j;
-
-    if (n2->n_in + n1->n_in > MAX_EDGE || n2->n_out + n1->n_out > MAX_EDGE)
-	return -1;
-    HashItem **hi_ = realloc(n2->hi, (n2->n_hi + n1->n_hi) * sizeof(*n2->hi));
-    if (!hi_)
-	return -1;
-    n2->hi = hi_;
-
-    // Discard n1, keeping n2
-    n1->pruned = 1;
-
-    // various counts
-    for (j = 0; j < g->kmer; j++)
-	for (i = 0; i < 5; i++)
-	    n2->bases[j][i] += n1->bases[j][i];
-    n2->count += n1->count;
-
-    // Migrate hash keys pointing to n1 to n2
-    for (i = 0, j = n2->n_hi; i < n1->n_hi; i++, j++) {
-	n2->hi[j] = n1->hi[i];
-	n2->hi[j]->data.p = n2;
-    }
-
-    // Merge in[] arrays; no loops exist, so a pure tree.
-    for (i = 0; i < n1->n_in; i++) {
-	int in1 = n1->in[i]->n[1];
-	// Unnecessary loop - here for bug checking only.
-	for (j = 0; j < n2->n_in; j++) {
-	    if (in1 == n2->in[j]->n[1])
-		break;
-	}
-	if (j != n2->n_in)
-	    abort(); // NB: shouldn't happen; implies not a tree.
-
-	// n1's parent out edge now links to n2 instead of n1
-	move_edge_out(g, g->node[in1], n1, n2);
-
-	// Add n2's in edge to n1.  n2 has it, but is defunct.
-	n1->in[i]->n[0] = n2->id;
-	n2->in[n2->n_in++] = n1->in[i];
-    }
-
-    // Cull c1's in edge from n1.
-    for (i = j = 0; i < c1->n_in; i++) {
-	if (c1->in[i]->n[1] == n1->id)
-	    continue;
-	c1->in[j++] = c1->in[i];
-    }
-    c1->n_in = j;
-
-    return 0;
-}
-
-// N1 and n2 have a common child c.  Insert n1 between n2 and c,
-// Ie we have c->n1->n2 instead of c->n1 and c->n2.
-int ins_head_node(dgraph_t *g, node_t *n1, node_t *n2, node_t *c) {
-    int i, j;
-
-    if (n1->n_in+1 >= MAX_EDGE || n1->n_out >= MAX_EDGE)
-	return -1;
-
-    // Add pad based on c->n2 frequency
-    int *d = n2->bases[g->kmer-1];
-    int depth = d[0] + d[1] + d[2] + d[3] + d[4];
-    for (j = 0; j < g->kmer; j++)
-	n1->bases[j][4] += depth;
-
-    // Move out edge c->n2 to n1->n2
-    move_edge_out(g, n2, c, n1);
-
-    // The above doesn't move the incoming edge linking
-    // n2->c, so we do that manually.
-    for (i = j = 0; i < c->n_in; i++) {
-	if (c->in[i]->n[1] == n2->id) {
-	    n1->in[n1->n_in++] = c->in[i];
-	    c->in[i]->n[0] = n1->id;
-	} else {
-	    c->in[j++] = c->in[i];
-	}
-    }
-    c->n_in = j;
-
-    return 0;
-}
-
-// Merge n_x1 nodes from n1 into n2 according to alignment S.
-int merge_head_tip(dgraph_t *g, node_t *n1, node_t *n2, node_t *c, int n_x1, int *S,
-		   char *ref_r, char *hseq) { // ref_r/hseq for debugging only
-    // Worth while doing a merge.
-    int x1 = 0, x2 = 0;
-    int i, ret = -1;
-
-    // NB: n_x1 is potentially up to g->kmer-1 too high.
-    while (n1 && n2 && x1 < n_x1) {
-	int op = *S++;
-	if (op == 0) {
-	    // match
-	    //printf("MERGE\t%d/%c %d/%c  %d/%d\n", x1, hseq[x1], x2, ref_r[x2], n1->id, n2->id);
-	    if (merge_head_node(g, n1, n2, c) < 0)
-		return -1;
-	    x1++; x2++;
-	    n1 = n1->n_in ? g->node[n1->in[0]->n[1]] : NULL;
-	    c = n2;
-	    node_t *new_n2 = NULL;
-	    for (i = 0; i < n2->n_in; i++) {
-		if (g->node[n2->in[i]->n[1]]->ref) {
-		    new_n2 = g->node[n2->in[i]->n[1]];
-		    break;
-		}
-	    }
-	    if (!new_n2)
-		break; // not in ref, so S alignment matrix is invalid from here on.
-	    ret = 0;
-	    n2 = new_n2;
-	} else if (op < 0) {
-	    // ins in cons
-	    while (n1 && op++) {
-		node_t *new_n1;
-		new_n1 = n1->n_in ? g->node[n1->in[0]->n[1]] : NULL;
-		//printf("INS\t%d/%c %d/-  %d/%d\n", x1, hseq[x1], x2, n1->id, n2->id);
-		if (ins_head_node(g, n1, n2, c) < 0)
-		    return -1;
-		x1++;
-		c = n1;
-		n1 = new_n1;
-		ret = 0;
-	    }
-	} else {
-	    // del in cons
-	    while (n2 && op--) {
-		//printf("SKIP\t%d/- %d/%c  %d/%d\n", x1, x2, ref_r[x2], n1->id, n2->id);
-		x2++;
-		for (i = 0; i < n2->n_in; i++) {
-		    if (g->node[n2->in[i]->n[1]]->ref) {
-			n2 = g->node[n2->in[i]->n[1]];
-			break;
-		    }
-		}
-		if (i == n2->n_in)
-		    n2 = NULL;
-	    }
-	}
-    }
-
-    return ret;
-}
-
-/*
- * Scan along reference finding nodes that are incoming.  As no
- * bubbles, all of these represent head-tips.  Scan back up that
- * produce the sequence, align that to the reference seq and then
- * fold the head tip back into the main branch.  (Anything remaining is
- * to be marked as a soft-clip.)
- */
-int merge_head_tips(dgraph_t *g, char *ref, int len) {
-    int merged = 0;
-    int i, j;
-
-    for (i = 0; i < len - g->kmer; i++) {
-	node_t *h = find_node(g, ref+i, g->kmer, 0);
-	if (!h || h->n_in <= 1)
-	    continue;
-
-	int ref_len = i+g->kmer-1; // prefix length to match against
-
-	// More than one node => head tip
-	//printf("Head tip at node %d\n", h->id);
-
-	int hlen = i+10, hidx = 0;
-	int (*head)[5] = malloc(hlen * sizeof(*head));
-	if (!head)
-	    return 0;
-
-	node_t *rn = NULL, *n = NULL;
-	for (j = 0; j < h->n_in; j++) {
-	    if (g->node[h->in[j]->n[1]]->ref == 0 && !n) {
-		n = g->node[h->in[j]->n[1]];
-	    } else if (g->node[h->in[j]->n[1]]->ref) {
-		rn = g->node[h->in[j]->n[1]];
-	    }
-	}
-
-	if (!n || !rn)
-	    continue;
-
-	//printf("Check node prefix from %d and %d\n", n->id, rn->id);
-
-	node_t *last = n;
-	node_t *n1 = n;
-	// Backtrack from here to unvisited non-ref branches.
-	// We stop at the first branch and merge that in a subsequent round,
-	// if at all.
-	while (n && hidx < hlen) {
-	    memcpy(&head[hidx++], n->bases[g->kmer-1], sizeof(*head));
-	    last = n;
-	    n = n->n_in == 1 ? g->node[n->in[0]->n[1]] : NULL;
-	}
-	for (j = g->kmer-2; j >= 0 && hidx < hlen; j--)
-	    memcpy(&head[hidx++], last->bases[j], sizeof(*head));
-
-//	// Reverse the list; shared code with assign_coords
-//	int (*v1)[5] = head;
-//	int I, J, K;
-//	for (I = 0, J = hidx-1; I < J; I++, J--) {
-//	    for (K = 0; K < 5; K++) {
-//		int tmp = v1[I][K];
-//		v1[I][K] = v1[J][K];
-//		v1[J][K] = tmp;
-//	    }
-//	}
-
-	// Reverse the 'ref' seq instead as we want to process alignment
-	// from right to left anyway.
-	char *ref_r = malloc(ref_len+1);
-	int k;
-	for (k = 0; k < ref_len; k++)
-	    ref_r[ref_len-1-k] = ref[k];
-	ref_r[ref_len] = 0;
-
-	char *hseq = vec2seq(head, hidx);
-	//printf("%.*s\n", ref_len, ref_r);
-	//puts(hseq);
-
-	int *S = malloc((ref_len + hidx) * sizeof(*S));
-
-	// Penalise left edge but not right edge; 1 = free, 0 = costs.
-	// Note this is left edge of reversed seq, so it would be the right
-	// edge in the graph.
-	int score = align_ss(hseq, ref_r, hidx, ref_len, 0, 0, X128, GOPEN,GEXT, S, 0,1,0,1);
-	//printf("Score=%d\n", score);
-	//display_ss(hseq, ref_r, hidx, ref_len, S, 0, 0);
-	//fflush(stdout);
-
-	// Scan along the graph finding the best scoring point.
-	int x1 = 0, x2 = 0, *S2 = S;
-	int best_score = 0;
-	int best_x1 = 0;
-	score = 0;
-	while (x1 < hidx && x2 < ref_len) {
-	    int op = *S2++;
-	    if (op == 0) {
-		// match
-		score += X128[hseq[x1]][ref_r[x2]]-2;
-		//printf("%d\t%d/%c %d/%c  %d\n", score, x1, hseq[x1], x2, ref_r[x2], X128[hseq[x1]][ref_r[x2]]);
-		x1++; x2++;
-	    } else if (op < 0) {
-		// ins in cons
-		while (op++) {
-		    score += islower(hseq[x1]) ? 0 : -4;
-		    //printf("%d\t%d/%c %d/-\n", score, x1, hseq[x1], x2);
-		    x1++;
-		}
-	    } else {
-		// del in cons
-		while (op--) {
-		    score += islower(ref_r[x2]) ? 0 : -4;
-		    //printf("%d\t%d/- %d/%c\n", score, x1, x2, ref_r[x2]);
-		    x2++;
-		}
-	    }
-	    if (best_score <  score) {
-		best_score = score;
-		best_x1 = x1; // before this but not including this pos
-	    }
-	}
-	//printf("Best x1 = %d / %d\n", best_x1, best_score);
-
-	if (best_score > 0)
-	    merged += (merge_head_tip(g, n1, rn, h, best_x1, S, ref_r, hseq) >= 0);
-
-	free(hseq);
-	free(ref_r);
-	free(S);
-    }
-
-    return merged;
-}
-
-int merge_tail_tips(dgraph_t *g) {
-    return 0;
-}
-#endif
-
-void prune(dgraph_t *g, int min_count) {
-    //    break_weak(g, min_count); FIXME for ref
-    //burst_bubbles(g, min_count);
-
-    prune_tails(g, min_count);
-    prune_heads(g, min_count);
-
-    // Leave bubbles if we're using this to realign BAM?
-    // Theory is if they link back into the main graph then pruning them will
-    // make realignment back a complicated process.  We're better to only
-    // prune hairs (head/tails) as they're soft-clip candidates, but we cannot
-    // soft-clip the internals.
-
-    //prune_bubbles(g, min_count);
 }
 
 void validate_graph(dgraph_t *g) {
@@ -2919,77 +2310,6 @@ typedef struct hseq {
     int score;
 } hseqs;
 
-// // Given a haplotype sequence, a reference sequence and the alignment between
-// // them, assign a ref coordinate to each kmer from that haplotype indicating
-// // the location (of the terminating base) in the reference.
-// //
-// // Where the haplotype has insertions, we use pos -1 to indicate ins.
-// // Where the haplotype has a deletion, we just skip that pos.
-// //
-// // The plan is we can then go through the debruijn construction process again
-// // with the reads, but instead of constructing the graph we use the updated
-// // graph to construct a new CIGAR string for each read.
-// //
-// // TODO: This is just all hap vs ref one at a time.  This may not give
-// // sensible hap to hap alignment though.  For that we need a true multiple
-// // sequence alignment (including the reference).
-// void pad_ref_hap(dgraph_t *g, hseqs *h, haps_t *ref, int *S) {
-//     int i = 0, j = 0;
-//     char *B = h->seq2, *A = ref->seq;
-//     int N = h->len, M = strlen(ref->seq);
-//
-//     int *pos = calloc(N + g->kmer, sizeof(int));
-//
-//     // Pos is hooked to last base in KMER.
-//     while (i < M || j < N) {
-// 	int op = *S++;
-// 	if (op == 0) {
-// 	    // match/mismatch
-// 	    pos[j] = i;
-// 	    if (j >= g->kmer-1) {
-// 		node_t *n = find_node(g, B + j-(g->kmer-1), g->kmer, 0);
-// 		if (n) {
-// 		    printf("%3d %3d  %c (%d)\n", j, pos[j], B[j], n->id);
-// 		    //putchar('M');
-// 		    n->pos = i;
-// 		    // FIXME: what if n->posa is already set?
-// 		    // We may want to prioritise the highest count route.
-// 		    n->posa = &pos[j-(g->kmer-1)];
-// 		} else {
-// 		    fprintf(stderr, "%3d  %c: Failed to find tail? node %.*s\n", i, B[j],
-// 			    g->kmer, B+j-(g->kmer-1));
-// 		}
-// 	    } else {
-// 		printf("%3d %3d  %c (before 1st KMER)\n", j, pos[j], B[j]);
-// 	    }
-// 	    i++, j++;
-// 	} else if (op > 0) {
-// 	    // ins to read
-// 	    //j += op;
-// 	    int ilen = op;
-// 	    while (op) {
-// 		pos[j] = op-ilen-1;
-// 		printf("%3d %3d +%.*s\n", j, pos[j], op, &B[j]);
-// 		//pos[j] = -1;
-// 		node_t *n = j >= g->kmer-1 ? find_node(g, B + j-(g->kmer-1), g->kmer, 0) : NULL;
-// 		if (n) {
-// 		    n->pos = -1;
-// 		    n->posa = &pos[j-(g->kmer-1)];
-// 		}
-// 		op--;
-// 		j++;
-// 		//putchar('I');
-// 	    }
-// 	} else if (op < 0) {
-// 	    // del in read.
-// 	    printf("%3d %3d -%.*s\n", j, pos[j], -op, &A[i]);
-// 	    i -= op;
-// 	}
-//     }
-//     //printf("\n");
-// }
-
-
 #define ADD_CIGAR(op,len)						\
     do {								\
         if (cig_op != op) {						\
@@ -3114,6 +2434,7 @@ int fix_tail(dgraph_t *g, node_t *last, char *seq, int len) {
     return best_i;
 }
 
+//#define NO_QUAL_FIX
 // seq2cigar based on the newer find_bubbles and common_ancestor output.
 int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *new_pos,
 		  uint32_t **new_cig, uint32_t *new_ncig) {
@@ -3480,388 +2801,6 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
     return 0;
 }
 
-// Scan consensus to look for short tandem repeats.
-// Clip cigar based on trailing ends overlapping but not spanning an STR.
-//
-// Note this is STR specific.
-// For example (NB: for real data we'll only clip when het indel is present,
-// and ideally only then when the indel is as long or longer than the repeat
-// unit).
-//
-// BEFORE
-// Cons: ATGCTAGTGTGTGTGTCTCTCTCTCAGCTAG
-// Seq   ATGCTAGTGTGTG
-// Seq   ATGCTAGTGTGTGTGTCTCTC
-// Seq      CTAGTGTGTGTGTCTCTCTCTCAGCTAG
-// Seq          TGTGTGTGTCTCTCTCTCAGCTAG
-// Seq                    TCTCTCTCAGCTAG
-//
-// AFTER
-// STR:  ------1111111111---------------
-// STR:  ---------------2222222222------
-// Cons: ATGCTAGTGTGTGTGTCTCTCTCTCAGCTAG
-// Seq   ATGCTAgtgtgtg                    doesn't span 1
-// Seq   ATGCTAGTGTGTGTGtctctc            spans 1, but not 2
-// Seq      CTAGTGTGTGTGTCTCTCTCTCAGCTAG  spans
-// Seq          tgtgtgtgtCTCTCTCTCAGCTAG  spans 2, but not 1
-// Seq                    tctctctcAGCTAG  doesn't span 2
-//
-// This code also modifies quality values via the BAQ style tag, taking note
-// of heterozygous indels in short tandem repeats giving potential sloppiness
-// in which base is in which column.  In this case we replace all qualities
-// in an STR with the minimum observed quality, minus a fixed penalty.
-int trim_cigar_STR(char *ref, int start, char *cons, bam1_t **bams, int nbam, int *new_pos) {
-    // Compute short tandem repeats.
-    uint32_t *str = NULL, *baq_s, i;
-    int len = strlen(ref), clen = strlen(cons);
-
-    // Align ref and consensus to work out regions of heterozygous and
-    // non-heterozygous indel.
-
-    uint32_t *cigar = NULL;
-    int ncigar = 0;
-    ksw_global_end(len, (uint8_t *)ref, clen, (uint8_t *)cons,
-		   //128, (int8_t *)X128, GOPEN, GEXT, 0,
-		   128, (int8_t *)X128, 3, 1, 0, // more generous with permitting indels
-		   &ncigar, &cigar, 0, 0, 0, 0);
-    //ksw_print_aln(stderr, len, ref, clen, cons, ncigar, cigar);
-
-    uint8_t *indel = calloc(1, len); // boolean; 1 if is indel
-    uint8_t *baq_i = calloc(1, len); // boolean; 1 if is indel
-    if (!indel || !baq_i)
-	return -1;
-
-#define BAQ_HET 1
-#define BAQ_HOM 2
-#define BAQ_NOSPAN 4
-
-    // Compute indel[] and baq_i[] arrays holding information on whether
-    // this reference coordinate is a heterozygous indel (or just an indel
-    // in general for BAQ analysis).
-    int rp = 0, cp = 0, k = 0; // rp/cp = ref/cons position.
-    while (rp < len && cp < clen) {
-	if (k >= ncigar)
-	    abort();//break;
-	int op = cigar[k] & BAM_CIGAR_MASK;
-	int oplen = cigar[k++] >> BAM_CIGAR_SHIFT;
-
-	switch(op) {
-	case BAM_CMATCH:
-	    while (oplen-- && rp < len) {
-		if (islower(cons[cp])) {
-		    baq_i[rp] |= BAQ_HET;
-		    indel[rp] = 1;
-		}
-		rp++; cp++;
-	    }
-	    break;
-
-	case BAM_CDEL: {
-	    // del in ref, or ins in cons
-	    int het = 0;
-	    while (oplen--) {
-		if (islower(cons[cp++]))
-		    het=1;
-	    }
-	    if (het) {
-		indel[rp>0?rp-1:rp] = 1;
-		indel[rp] = 1;
-		baq_i[rp>0?rp-1:rp] |= BAQ_HET;
-		baq_i[rp] |= BAQ_HOM;
-	    } else {
-		baq_i[rp>0?rp-1:rp] |= BAQ_HOM;
-		baq_i[rp] |= BAQ_HOM;
-	    }
-	    break;
-	}
-
-	case BAM_CINS:
-	    // ins in ref, or del in cons
-	    if (islower(cons[cp]) ||
-		(cp>0 && islower(cons[cp-1])) ||
-		(cp+1<len && islower(cons[cp+1]))) {
-		// in or adjacent to heterozygous indel.
-		int i;
-		for (i = 0; i < oplen; i++) {
-		    if (rp+i >= 0 && rp+i < len) {
-			baq_i[rp+i] |= BAQ_HET;
-			indel[rp] = 1;
-		    }
-		}
-	    } else {
-		int i;
-		for (i = 0; i < oplen; i++)
-		    if (rp+i >= 0 && rp+i < len)
-			baq_i[rp+i] |= BAQ_HOM;
-	    }
-	    rp += oplen;
-	    break;
-
-	default:
-	    abort();
-	}
-    }
-    free(cigar);
-
-    // Find STRs and filter out those that aren't inside known indel regions.
-    rep_ele *reps, *elt, *tmp;
-    int str_num = 0;
-
-    reps = find_STR(ref, len, 0);
-    str = calloc(len, sizeof(*str));
-    baq_s = calloc(len, sizeof(*baq_s));
-
-    DL_FOREACH_SAFE(reps, elt, tmp) {
-	if (elt->end - elt->start + 1 < MIN_STR)
-	    goto next;
-
-	// If any of STR spans an observed indel, then mark it, otherwise
-	// we're happy to keep alignments against this region.
-	int left  = elt->start-5 < 0 ? 0 : elt->start-5;
-	int right = elt->end+5 > len ? len : elt->end+5;
-	for (i = left; i < right; i++) {
-	    if (i >= 0 && i < len && indel[i])
-		break;
-	}
-
-	if (i != right) {
-	    if (elt->start < len && elt->start > 0 && ref[elt->start] != 'N') {
-		for (i = elt->start; i < elt->end && i < len; i++)
-		    str[i] |= (1<<str_num);
-		str_num = (str_num+1)&31;
-	    }
-	}
-
-	// For BAQ calculation instead of soft-clipping
-	if (elt->end > elt->start) {
-	    left  = elt->start < 0 ? 0 : elt->start;
-	    right = elt->end > len-1 ? len-1 : elt->end;
-	    for (i = left; i <= right; i++) {
-		if (baq_i[i]) {
-		    int baq_x = 0;
-		    for (i = left; i <= right; i++)
-			baq_x |= baq_i[i];
-		    //fprintf(stderr, "STR: %2d .. %2d %.*s |= %d\n", left+start, right+start, elt->end - elt->start+1, &ref[elt->start], baq_x);
-		    for (i = left; i <= right; i++)
-			baq_s[i] |= baq_x;
-		    break;
-		}
-	    }
-	}
-
-    next:
-	DL_DELETE(reps, elt);
-	free(elt);
-    }
-
-#define QSUB_HET    5
-#define QSUB_HOM    5
-#define QSUB_NOSPAN 5
-
-#if 1
-    // Indels within STRs have bases that may in the wrong column,
-    // so adjust their qualities according to the baq_s[] array.
-    for (i = 0; i < nbam; i++) {
-	bam1_t *b = bams[i];
-	if (b->core.flag & BAM_FUNMAP)
-	    continue;
-
-	int p = new_pos[i]+1-start;
-	//fprintf(stderr, "New seq: %s @ %d\n", bam_get_qname(b), new_pos[i]+1);
-	int cig_ind = 0, op, op_len = 0, qmin, pstart = -1, pbaq = 0;
-	uint8_t *qual = bam_get_qual(b);
-	uint32_t *cig = bam_get_cigar(b);
-	uint32_t new_qual[1024]; // FIXME max seq len
-	int j;
-	for (j = 0; j < b->core.l_qseq; j++,op_len--) {
-	    if (op_len == 0) {
-		if (cig_ind < b->core.n_cigar) {
-		    op = bam_cigar_op(cig[cig_ind]);
-		    op_len = bam_cigar_oplen(cig[cig_ind++]);
-		} else {
-		    op = BAM_CSOFT_CLIP;
-		    op_len = INT_MAX;
-		}
-	    }
-
-	    if (p >= 0 && p < len) {
-		if (baq_s[p] && pstart == -1) {
-		    // new STR
-		    pstart = j;
-		    qmin = qual[j];
-		    pbaq = baq_s[p];
-
-		    if (j == 0) // Starting in an STR implies even lower quality
-			pbaq |= 4;
-		} else if (baq_s[p] && pstart != -1) {
-		    pbaq |= baq_s[p];
-		    // continuation of STR
-		    if (qmin > qual[j])
-			qmin = qual[j];
-		} else if (!baq_s[p] && pstart != -1) {
-		    // end of STR
-		    int k;
-		    //fprintf(stderr, "QUALi %d..%d to %d\n", pstart+new_pos[i]+1, j-1+new_pos[i], qmin);
-		    if (pbaq & BAQ_HET) { // het is worse to deal with and has higher penalty
-			if (pbaq & BAQ_NOSPAN)
-			    qmin -= QSUB_NOSPAN;
-			for (k = pstart; k < j; k++)
-			    qual[k] = qmin-QSUB_HET>2 ?qmin-QSUB_HET :2;
-		    } else {
-			for (k = pstart; k < j; k++)
-			    //qual[k] = qmin>2+QSUB_HOM ?qmin-QSUB_HOM :2;
-			    qual[k] = qual[k]-QSUB_HOM>2 ?qual[k]-QSUB_HOM :2;
-		    }
-		    pstart = -1;
-		    pbaq = 0;
-		}
-	    }
-
-	    //fprintf(stderr, "%c %d\t%d\t%c\t%d\n", "MIDNSHP=XB"[op], j, (int)p+start+1, "=ACMGRSVTWYHKDBN"[bam_seqi(bam_get_seq(b), j)], baq_s[p]);
-	    if (bam_cigar_type(op) & 2)
-		p++;
-	}
-	if (pstart != -1) {
-	    int k;
-	    //fprintf(stderr, "QUALe %d..%d to %d\n", pstart+new_pos[i]+1, b->core.l_qseq+new_pos[i], qmin);
-
-	    // ending within a region implies lower qual still!
-	    if (pbaq & BAQ_HET) {
-		if (pbaq & BAQ_NOSPAN)
-		    qmin -= QSUB_NOSPAN;
-		for (k = pstart; k < b->core.l_qseq; k++)
-		    qual[k] = qmin-QSUB_HET>2 ?qmin-QSUB_HET :2;
-	    } else {
-		for (k = pstart; k < b->core.l_qseq; k++)
-		    //qual[k] = qmin>2+QSUB_HOM ?qmin-QSUB_HOM :2;
-		    qual[k] = qual[k]-QSUB_HOM>2 ?qual[k]-QSUB_HOM :2;
-	    }
-	}
-    }
-#endif
-
-#if 1
-    // Sequences that start or end within an STR overlapping a heterozygous
-    // indel do not correctly confirm the copy number, so soft-clip them.
-    char *cig_str = NULL;
-    int cig_str_len = 0, cig_str_ind;
-    for (i = 0; i < nbam; i++) {
-	int left_trim = 0;
-	int left_shift = 0;
-	bam1_t *b = bams[i];
-	if (b->core.flag & BAM_FUNMAP)
-	    continue;
-	uint32_t STR = str[new_pos[i]+1-start];
-	if (new_pos[i] > start)
-	    STR |= str[new_pos[i]-start-1]; // incase we start in an insertion
-	int sp, rp; // seq & ref pos
-	//fprintf(stderr, "Name: %s\t", bam_get_qname(b));
-	//uint8_t *seq = bam_get_seq(b);
-	int op_len = 0, op, cig_ind = 0;
-	uint32_t *cig = bam_get_cigar(b);
-	int adjacent_STR = 0;
-
-	int cig_len = len;
-	for (cig_ind = 0; cig_ind < b->core.n_cigar; cig_ind++)
-	    cig_len += cig[cig_ind]>>BAM_CIGAR_SHIFT;
-	if (cig_str_len < cig_len) {
-	    cig_str_len = cig_len;
-	    cig_str = realloc(cig_str, cig_str_len);
-	    assert(cig_str);
-	}
-	cig_ind = cig_str_ind = 0;
-	//for (sp = 0, rp = b->core.pos; sp < b->core.l_qseq; ) {
-	for (sp = 0, rp = new_pos[i]; sp < b->core.l_qseq; ) {
-	    //char sbase = "=ACMGRSVTWYHKDBN"[bam_seqi(seq, sp)];
-	    //char rbase = rp >= start && rp < start+len ? ref[rp-start] : 'N';
-	    if (op_len == 0) {
-		if (cig_ind < b->core.n_cigar) {
-		    op = bam_cigar_op(cig[cig_ind]);
-		    op_len = bam_cigar_oplen(cig[cig_ind++]);
-		} else {
-		    op = BAM_CSOFT_CLIP;
-		    op_len = INT_MAX;
-		}
-	    }
-	    assert(cig_str_ind < cig_len);
-	    cig_str[cig_str_ind] = op;
-	    //printf("%c/%d\t%c/%d\t%c\t%08x\t%x\n", sbase, sp, rbase, rp, "MIDNSHP=XB"[op], STR, str[rp-start]);
-	    if (STR) {
-		// check backwards for pads
-		int j = cig_str_ind-1;
-		while (j >= 0 && cig_str[j] == BAM_CPAD)
-		    j--;
-		cig_str_ind = j+1;
-
-		if (bam_cigar_type(op) & 2) //ref
-		    left_shift++;
-		if (!(bam_cigar_type(op) & 1) && op != BAM_CHARD_CLIP) {
-		    // del, skip, pad; just delete them from cigar
-		    cig_str_ind--;
-		} else if (bam_cigar_type(op) & 1) { //seq
-		    cig_str[cig_str_ind] = BAM_CSOFT_CLIP;
-		    left_trim++;
-		}
-		adjacent_STR = 1;
-	    } else if (adjacent_STR) {
-		if (!(bam_cigar_type(op) & 2)) { //!ref, so pad, ins, etc
-		    if (op != BAM_CHARD_CLIP) {
-			left_trim++;
-			if (bam_cigar_type(op) & 1) // seq
-			    cig_str[cig_str_ind] = BAM_CSOFT_CLIP;
-			else
-			    cig_str_ind--; // trim - eg pad
-		    }
-		} else {
-		    adjacent_STR = 0;
-		}
-	    }
-
-	    if ((bam_cigar_type(op) & 2) && rp >= start && rp < start+len)
-		// and off existing STRs that finish, but don't acquire
-		// new ones that we didn't start within.
-		STR &= ~(STR ^ str[rp-start]);
-	    sp += bam_cigar_type(op) & 1;
-	    rp += (bam_cigar_type(op) & 2) ? 1 : 0;
-	    op_len--;
-	    cig_str_ind++;
-	}
-	// FIXME: trailing hard-clip at end of cigar; not in seq so exit loop early.
-
-	if (0) {
-	    fprintf(stderr, "trim %d, shift %d\t", left_trim, left_shift);
-	    int k;
-	    for (k = 0; k < cig_str_ind; k++)
-		fputc("MIDNSHP=XB"[(uc)cig_str[k]], stderr);
-	    fputc('\n', stderr);
-	}
-
-	if (left_trim || left_shift) {
-	    uint32_t *cig2 = malloc(b->core.l_qseq * sizeof(*cig2)), cig2_ind = 0;
-	    int k = 0;
-	    while (k < cig_str_ind) {
-		int j = k;
-		while (j < cig_str_ind && cig_str[k] == cig_str[j])
-		    j++;
-		cig2[cig2_ind++] = bam_cigar_gen(j-k, cig_str[k]);
-		k = j;
-	    }
-	    new_pos[i] += left_shift;
-	    replace_cigar(b, cig2_ind, cig2);
-	    free(cig2);
-	}
-    }
-
-    free(cig_str);
-#endif
-    free(str);
-    free(indel);
-    free(baq_s);
-    free(baq_i);
-
-    return 0;
-}
-
 // After a realignment, produce consensus from cigar strings to get indel
 // locations and consensus.  Couple this with simple STR detection to
 // adjust qualities in regions where heterozygous indels coincide with
@@ -4113,321 +3052,6 @@ int int64_compar(const void *vp1, const void *vp2) {
     return ((*(const uint64_t *)vp2)>>32) - ((*(const uint64_t *)vp1)>>32);
 }
 
-
-// Starting from a single node, we recurse down (most) paths making
-// sure we cover all nodes that can be reached.  Each route is allocated
-// a new haplotype structure.
-//
-// To avoid combinatorial explosion, we don't try every route and prefer
-// to stick to the busiest ones instead when we call this multiple
-// times with different head nodes.
-hseqs *follow_graph(dgraph_t *g, int x, char *prefix, char *prefix2, int len, hseqs *h, int *nh) {
-    int seq_idx = 0, seq_alloc = len + g->kmer*2;
-    char *seq = calloc(1, seq_alloc);
-    char *seq2 = calloc(1, seq_alloc);
-
-    //fprintf(stderr, "Follow graph n=%d with prefix '%.*s'\n", x, len, prefix);
-
-    memcpy(seq, prefix, len);
-    memcpy(seq2, prefix2, len);
-    seq_idx += len;
-
-    node_t *n = g->node[x];
-    if (!prefix) {
-	// Note: currently uses first tagged seq only per node, but this is
-	// valid as we should only use follow_graph before bubble collapsing.
-	memcpy(seq + len, n->hi[0]->key, g->kmer);
-	memcpy(seq2 + len, n->hi[0]->key, g->kmer);
-	seq_idx += g->kmer;
-    } else {
-	seq2[seq_idx] = n->hi[0]->key[g->kmer-1];
-	seq[seq_idx++] = vec2X(n->bases[g->kmer-1]);
-    }
-
-    while (n->n_out == 1 /*&& n->visited != 'h'*/) {
-	n->visited = 'h';
-	n = g->node[n->out[0]->n[1]];
-	if (seq_idx == seq_alloc) {
-	    seq_alloc *= 2;
-	    seq = realloc(seq, seq_alloc);
-	    seq2 = realloc(seq2, seq_alloc);
-	}
-	seq2[seq_idx] = n->hi[0]->key[g->kmer-1];
-	seq[seq_idx++] = vec2X(n->bases[g->kmer-1]);
-    }
-
-    if (n->n_out > 1 /*&& n->visited != 'h'*/) {
-	int i;
-	n->visited = 'h';
-
-	// Recurse down best route first
-	uint64_t *counts = malloc(n->n_out * sizeof(*counts));
-	for (i = 0; i < n->n_out; i++)
-	    counts[i] = (((uint64_t)n->out[i]->count)<<32) | i;
-	qsort(counts, n->n_out, sizeof(*counts), int64_compar);
-
-	// If we have any node unvisited, then follow it.
-	int followed = 0;
-	for (i = 0; i < n->n_out; i++) {
-	    int j = counts[i]&0xffffffff;
-	    node_t *x = g->node[n->out[j]->n[1]];
-	    if (x->visited != 'h') {
-		h = follow_graph(g, n->out[j]->n[1], seq, seq2, seq_idx, h, nh);
-		followed = 1;
-	    }
-	}
-	// If we didn't follow any routes because all have been visited,
-	// still follow one (the best one) so our haplotypes are full length.
-	if (!followed)
-	    h = follow_graph(g, n->out[counts[0]&0xffffffff]->n[1], seq, seq2, seq_idx, h, nh);
-	free(counts);
-	free(seq);
-	free(seq2);
-    } else {
-	//fprintf(stderr, "haplotype: %d..%d %.*s\n", norig->id, n->id, seq_idx, seq);
-	(*nh)++;
-	hseqs *h2 = calloc(1, sizeof(*h2));
-	h2->next = h;
-	h2->seq = seq;
-	h2->seq2 = seq2;
-	h2->len = seq_idx;
-	h = h2;
-    }
-
-    return h;
-}
-
-#if 0
-// FIXME: min_count needs to be depth based.  Find mean count and
-// use this to cap min_count?  So low coverage would reduce,
-// min_count, but high coverage or lots of low complexity data won't
-// increase it.
-int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
-    HashTable *kmer_hash = NULL, *neighbours = NULL;
-    HashItem *hi;
-    int i, counth = 0, countw = 0;
-    string_alloc_t *sp = string_pool_create(errk*10000);
-
-    /*  Keep copy of sequences, so updating doesn't invalidate the hash table. */
-    char **old_seq = calloc(n, sizeof(char *));
-    if (!old_seq)
-	return -1;
-
-    HashTable *hash = kmer_hash;
-
-    hash = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
-    kmer_hash = hash;
-
-    double perr[256];
-    for (i = 0; i < 256; i++)
-	perr[i] = pow(10, i/-10.0);
-
-    // Hash words
-    for (i = 0; i < n; i++) {
-	char *seq = h[i].seq;
-	uint8_t *qual = h[i].qual;
-	int len = strlen(seq), j, k;
-	double mq = 0;
-	for (j = 0; j < errk-1; j++)
-	    mq += perr[qual[j]];
-
-	for (j = 0; j < len-errk; j++) {
-	    HashData hd;
-	    HashItem *hi;
-	    int nw;
-
-#ifdef CORRECT_MIN_CONF
-	    // Phredish likelihood for expected number of errors.
-	    mq += perr[qual[j+errk-1]];
-	    int pq = -4.342945*log(mq);
-	    mq -= perr[qual[j]];
-	    hd.x[0] = 0; hd.x[1] = 0;
-
-	    // pq can be negative if expectation is more than 1 err.
-	    pq = pq<0 ?0 :pq;
-
-	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
-	    hi->data.x[0]++;
-
-	    // Store aggregate qual for all instances of kmer.
-	    // hi->data.x[1] += pq;
-
-	    // Store maximum qual for kmer
-	    if (hi->data.x[1] < pq)
-		hi->data.x[1] = pq;
-#else
-	    // Phredish likelihood for expected number of errors.
-	    hd.x[0] = 0;
-	    hi = HashTableAdd(hash, seq+j, errk, hd, &nw);
-	    hi->data.x[0]++;
-#endif
-	    counth++;
-	    countw+=nw;
-	}
-    }
-
-    int avg = 0;
-    {
-	// discard 10% of words and error correct those to remaining 90%
-	int F[100] = {0}, n = 0, t = 0, tlim = CORRECT_PERC * counth;
-	HashIter *hiter = HashTableIterCreate();
-	while ((hi = HashTableIterNext(hash, hiter)))
-	    F[hi->data.x[0] > 99 ? 99 : hi->data.x[0]]++;
-
-	for (i = 1; i < 100; i++) {
-	    //fprintf(stderr, "CALL %d count %d tot %d / %d\n", i, F[i], t, counth);
-	    if (t >= tlim)
-		break;
-	    t += i*F[i];
-	}
-	avg = i;
-    }
-    if (avg < min_count)
-	avg = min_count;
-
-    // Find common words and produce neighbourhoods
-    fprintf(stderr, "%d unique words, %d total words, threshold %d\n", countw, counth, avg);
-    neighbours = HashTableCreate(8, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS | HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
-
-    HashIter *hiter = HashTableIterCreate();
-    while ((hi = HashTableIterNext(hash, hiter))) {
-	//fprintf(stderr, "%.*s %d %d\n", errk, hi->key, hi->data.x[0], hi->data.x[1]);
-
-#ifdef CORRECT_MIN_CONF
-	// Also try hi->data.x[1]+hi->data.x[0] >= CORRECT_MIN_CONF to help boost
-	// deep sequences?  Or is this just covered in average?
-	// In that case "x[0] >= avg || x[1] >= MIN_CONF" may be better...
-	//if (hi->data.x[0] >= avg && hi->data.x[0] + hi->data.x[1] >= CORRECT_MIN_CONF) {
-	if (hi->data.x[0] >= avg && hi->data.x[1] >= CORRECT_MIN_CONF)
-#else
-        if (hi->data.x[0] >= avg)
-#endif
-	{
-	    int j;
-	    for (j = 0; j < errk; j++) {
-		//for (j = 0; j < errk; j += 8) {
-		int nw, k;
-		HashData hd;
-		hd.p = hi->key;
-		int base = hi->key[j];
-		for (k = 0; k < 4; k++) {
-		    HashItem *hi2;
-		    if ("ACGT"[k] == base) continue;
-		    char *N = string_alloc(sp, errk);
-		    memcpy(N, hi->key, errk);
-		    N[j] = "ACGT"[k];
-		    hi2 = HashTableAdd(neighbours, N, errk, hd, &nw);
-		    if (!nw) hi2->data.p = NULL; // mark the clash
-		}
-	    }
-	}
-    }
-    HashTableIterDestroy(hiter);
-
-    int nc = 0;
-
-    // Consider building neighbour at single point (so 4 neighbours per kmer rather than 4xkmer)
-    // and comparing all words vs neighbour.
-    // Instead we compare every kmer/2 words vs all neighbours.
-
-
-    // Auto-correct rare words
-    for (i = 0; i < n; i++) {
-	int P; for (P = 0; P < 1; P++) { // LOOP
-	char *seq = h[i].seq;
-	uint8_t *qual = h[i].qual;
-	char *s2 = seq, *seq_ = seq;
-	int len = strlen(seq), j;
-
-	// Multiple passes here so we can rapidly fix more than 1 single error without
-	// having to hash a new neighbourhood several times over.
-	int max_passes = 2;
-	int pass = 0;
-	int corrected;
-
-    another_pass:
-	corrected = 0;
-
-#define EDGE_DIST 3
-	for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {
-	    HashItem *hi, *hi2;
-
-	    // Note using s2 here instead of seq means we can correct multi-base
-	    // errors 1 base at a time, provided they fit the < min_count criteria.
-
-	    // Ditch common words
-	    hi = HashTableSearch(hash, s2+j, errk);
-	    if (hi && hi->data.x[0] >= min_count) {
-		// Ideally we'd skip along kmer at a time, or at least kmer/2.
-		// However in practice this seems to harm things considerably.
-		continue;
-	    }
-
-	    hi2 = HashTableSearch(neighbours, s2+j, errk);
-	    if (!hi2 || !hi2->data.p) {
-		//fprintf(stderr, "No correction for %.*s %d\n", errk, hi->key, hi->data.i);
-		continue;
-	    }
-
-	    int k;
-	    for (k = 0; k < errk; k++)
-		if (s2[j+k] != ((char *)hi2->data.p)[k])
-		    break;
-	    if (k == errk)
-		continue;
-
-	    if (qual && min_qual && qual[j+k] >= min_qual)
-		continue;
-
-#ifdef CORRECT_MIN_CONF
-	    // // Don't correct marginal kmers to slightly less marginal kmers.
-	    // HashItem *hi3 = HashTableSearch(hash, hi2->data.p, errk);
-	    // if (hi && hi3 && hi3->data.x[1] < CORRECT_MULT*hi->data.x[1]) continue;
-
-	    //fprintf(stderr, "Correct from qual %d to qual %d\n", hi->data.x[1], hi3->data.x[1]);
-#endif
-
-	    if (s2 == seq)
-		s2 = strdup(seq);
-
-	    assert(s2[j+k] != ((char *)hi2->data.p)[k]);
-	    s2[j+k] = ((char *)hi2->data.p)[k];
-//#ifndef NO_QUAL_FIX
-//	    qual[j+k] /= 4; // if we corrected it, also mark as low qual!
-//#endif
-	    nc++;
-	    //fprintf(stderr, "Correct %.*s %d -> %.*s\n", errk, hi->key, hi->data.i, errk, hi2->data.p);
-
-	    j += k/2; // two bites at the cherry
-	    corrected = 1;
-	}
-
-	seq_ = s2;
-	if (corrected && ++pass < max_passes)
-	    goto another_pass;
-
-	if (seq != s2) {
-	    if (old_seq[i])
-		free(seq);
-	    else
-		old_seq[i] = seq;
-	    h[i].seq = s2;
-	}
-	}
-    }
-    fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth);
-
-    for (i = 0; i < n; i++)
-	if (old_seq[i])
-	    free(old_seq[i]);
-
-    string_pool_destroy(sp);
-    HashTableDestroy(hash, 0);
-    HashTableDestroy(neighbours, 0);
-
-    return nc;
-}
-#endif
 
 // FIXME: min_count needs to be depth based.  Find mean count and
 // use this to cap min_count?  So low coverage would reduce,
@@ -4891,129 +3515,6 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 
     return nc;
 }
-
-#define CORRECT_ERRORS_N(N) \
-    int correct_errors##N(haps_t *h, int n, int min_count, int min_qual) { \
-	HashItem *hi;							\
-	int i, counth = 0, countw = 0;					\
-	khiter_t k;							\
-	const int errk = N;						\
-	string_alloc_t *sp = string_pool_create(errk*10000);		\
-									\
-	ec_hash##N##_t  *hash       = kh_init(ec_hash##N);		\
-	ec_neigh##N##_t *neighbours = kh_init(ec_neigh##N);		\
-	char **old_seq;							\
-									\
-	/*  Keep copy of sequences, so updating doesn't invalidate the hash table. */ \
-	old_seq = calloc(n, sizeof(char *));				\
-	if (!old_seq)							\
-	    return -1;							\
-									\
-	/* Hash words in all our sequences; hash[kmer] => count(int) */	\
-	for (i = 0; i < n; i++) {					\
-	    char *seq = h[i].seq;					\
-	    int len = strlen(seq), j;					\
-	    for (j = 0; j < len-errk; j++) {				\
-		int nw;							\
-		k = kh_put(ec_hash##N, hash, seq+j, &nw);		\
-		kh_val(hash, k) = nw ? 1 : kh_val(hash, k)+1;		\
-									\
-		counth++;						\
-		countw+=(nw > 0);					\
-	    }								\
-	}								\
-									\
-	int avg = 2*ceil((double)counth / countw);			\
-	fprintf(stderr, "%d unique words, %d total words\n", countw, counth); \
-									\
-	/* Find common words and produce neighbourhoods */		\
-	for (k = kh_begin(hash); k != kh_end(hash); k++) {		\
-	    if (!kh_exist(hash, k))					\
-		continue;						\
-									\
-	    if (kh_val(hash, k) >= avg) {				\
-		int j;							\
-		for (j = 0; j < errk; j++) {				\
-		    int nw, b;						\
-									\
-		    int base = kh_key(hash, k)[j];			\
-		    for (b = 0; b < 4; b++) {				\
-			if ("ACGT"[b] == base) continue;		\
-			char *n = string_alloc(sp, errk);		\
-			memcpy(n, kh_key(hash, k), errk);		\
-			n[j] = "ACGT"[b];				\
-									\
-			khint_t nk = kh_put(ec_neigh##N, neighbours, n, &nw); \
-			kh_val(neighbours, nk) = nw ? kh_key(hash, k) : NULL; \
-		    }							\
-		}							\
-	    }								\
-	}								\
-									\
-	/* Auto-correct rare words */					\
-	int nc = 0;							\
-	for (i = 0; i < n; i++) {					\
-	    char *seq = h[i].seq;					\
-	    uint8_t *qual = h[i].qual;					\
-	    char *s2 = seq;						\
-	    int len = strlen(seq), j;					\
-	    for (j = EDGE_DIST; j < len-errk-EDGE_DIST; j++) {		\
-		HashItem *hi, *hi2;					\
-									\
-		khint_t k = kh_get(ec_hash##N, hash, seq+j);		\
-		if (k == kh_end(hash) || kh_val(hash, k) >= min_count)	\
-		    continue;						\
-									\
-		k = kh_get(ec_neigh##N, neighbours, seq+j);		\
-		if (k == kh_end(neighbours) || !kh_val(neighbours, k))	\
-		    continue;						\
-									\
-		/* Does seq query and hash key match? If not, correct */ \
-		int l;							\
-		for (l = 0; l < errk; l++)				\
-		    if (s2[j+l] != kh_val(neighbours, k)[l])		\
-			break;						\
-		if (l == errk)						\
-		    continue;						\
-									\
-		if (qual && min_qual && qual[l] >= min_qual)		\
-		    continue;						\
-									\
-		if (s2 == seq) {					\
-		    old_seq[i] = seq;					\
-		    s2 = strdup(seq);					\
-		}							\
-		s2[j+l] = kh_val(neighbours, k)[l];			\
-		nc++;							\
-	    }								\
-	    h[i].seq = s2;						\
-	}								\
-	fprintf(stderr, "Corrected %d (%5.2f%% %5.2f%%)\n", nc, 100.0*nc/countw, 100.0*nc/counth); \
-									\
-	for (i = 0; i < n; i++)						\
-	    if (old_seq[i])						\
-		free(old_seq[i]);					\
-									\
-	/* Free old seqs */						\
-	string_pool_destroy(sp);					\
-	kh_destroy(ec_hash##N, hash);					\
-	kh_destroy(ec_neigh##N, neighbours);				\
-									\
-	return nc;							\
-    }
-
-#define ERROR_CORRECTION(N)			    \
-    KHASH_KMER_INIT(N)				    \
-    KHASH_MAP_INIT_KMER_N(ec_hash, int, N)	    \
-    typedef khash_t(ec_hash##N) ec_hash##N##_t;	    \
-    KHASH_MAP_INIT_KMER_N(ec_neigh, char*, N)       \
-    typedef khash_t(ec_neigh##N) ec_neigh##N##_t;   \
-    CORRECT_ERRORS_N(N)
-
-ERROR_CORRECTION(27)
-ERROR_CORRECTION(25)
-ERROR_CORRECTION(20)
-ERROR_CORRECTION(14)
 
 static unsigned char complementary_base[256] = {
     0,   1,   2,   3,   4,   5,   6,   7,   8,   9,  10,  11,  12,  13,  14,  15,
@@ -5572,72 +4073,6 @@ int number_nodes_above(dgraph_t *g) {
 }
 
 
-//#define REVERSE
-//
-// We can simulate left-justified alignments instead of our
-// current right justified ones by reversing the reference and
-// bam records, doing the alignments, and then reversing back
-// again.
-//
-// This is a bizarre hack, but it's easier than producing left
-// justified alignments because the cause of right justification
-// currently is through having the node position being the last
-// base in the kmer instead of the first.  Change that is
-// substantial work, so this is just a quick test to judge whether
-// it is worth while doing.  (It isn't)
-
-#ifdef REVERSE
-void bam_reverse(bam_hdr_t *hdr, bam1_t *b) {
-    int j, k;
-
-    // Swap sequence in plac e
-    uint8_t *iseq = bam_get_seq(b);
-    int odd;
-    if ((odd = (b->core.l_qseq & 1))) {
-	// Odd number; start by shifting right by a nibble:
-	// AB CD EF G-
-	// GF ED CB A-
-	for (j = b->core.l_qseq/2; j > 0; j--) {
-	    // AB CD EF G- to
-	    // -A BC DE FG
-	    iseq[j] = (iseq[j] >> 4) | (iseq[j-1] << 4);
-	}
-	iseq[0] >>= 4;
-	b->core.l_qseq++;
-    }
-    // followed by reversal:
-    // -A BC DE FG to    or AB CD EF GH to
-    // GF ED CB A-          HG FE DC BA
-    for (j = 0, k = b->core.l_qseq/2-1; j < k; j++, k--) {
-	uint8_t t = iseq[j];
-	iseq[j] = (iseq[k] >> 4) | (iseq[k] << 4);
-	iseq[k] = (t >> 4) | (t << 4);
-    }
-    if (odd) b->core.l_qseq--;
-
-
-    // Swap position
-    b->core.pos = hdr->target_len[b->core.tid] - bam_endpos(b);
-
-    if (b->core.flag & BAM_FUNMAP)
-	return;
-
-    // Swap cigar
-    uint32_t *cig = bam_get_cigar(b);
-    for (j = 0, k = b->core.n_cigar-1; j < k; j++, k--)  {
-	uint32_t tmp = cig[j];
-	cig[j] = cig[k];
-	cig[k] = tmp;
-    }
-}
-
-void bam_reverse_array(bam_hdr_t *hdr, bam1_t **bam, int nbams) {
-    int i;
-    for (i = 0; i < nbams; i++)
-	bam_reverse(hdr, bam[i]);
-}
-#endif
-
 
 int count_snps(char *ref_seq, int ref_len, int ref_start,
 	       bam1_t **bams, int nbams, haps_t *haps,
@@ -5763,29 +4198,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     //dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start, cons1, cons2, cons_len);
 
-#ifdef REVERSE
-    fprintf(stderr, "\nPOS1:\t");
-    for (i = 0; i < nbams; i++)
-	fprintf(stderr, "%d\t", bams[i]->core.pos);
-    fprintf(stderr, "\n");
-
-    int *orig_pos = malloc(nbams *sizeof(int));
-    for (i = 0; i < nbams; i++)
-	orig_pos[i] = bams[i]->core.pos;
-
-    bam_reverse_array(hdr, bams, nbams);
-    ref_start = hdr->target_len[bams[0]->core.tid] - (ref_start+ref_len);
-    if (ref_seq) {
-	int i, j;
-	ref_seq = strdup(ref_seq);
-	for (i = 0, j = ref_len-1; i < j; i++, j--) {
-	    char c = ref_seq[i];
-	    ref_seq[i] = ref_seq[j];
-	    ref_seq[j] = c;
-	}
-    }
-#endif
-
     init_X128_score(X128,      0,-4,4); // for seqs against each other to form pileup
     init_X128_score(X128_ref, -3,-3,1); // for seq pileup against reference
 
@@ -5875,9 +4287,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     graph2dot(g, "f.dot", 0);
     //graph2dot_simple(g, "x.dot", 5);
 
-    // Prune paths having < 2 counts
-    //prune_edges(g, 2);
-
     // Merge bubbles excluding reference
     if (find_bubbles(g, 0, 10) < 0) {
 	graph_destroy(g);
@@ -5910,32 +4319,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     }
     loop_check(g, 0);
     graph2dot(g, "_F.dot", 0);
-
-
-    // Also try this after find_insertions() call
-#if 0
-    cons = compute_consensus(g);
-    if (add_seq(g, cons->seq, 0, 0) < 0 || loop_check(g, 0)) {
-	fprintf(stderr, "Loop when adding consensus\n");
-	graph_destroy(g);
-	if ((kmer += 10) < MAX_KMER)
-	    goto bigger_kmer;
-	g = NULL;
-	goto err;
-    }
-
-    // Merge in head & tail tips
-    int merged;
-    do {
-	merged = 0;
-	//puts("Merging\n");
-	merged += merge_head_tips(g, cons->seq, strlen(cons->seq));
-	graph2dot(g, "H.dot", 0);
-
-	merged += merge_tail_tips(g);
-	graph2dot(g, "T.dot", 0);
-    } while (merged);
-#endif
 
     int shift = bams[0]->core.pos+1;
 
@@ -6039,10 +4422,19 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	    cons1 = cons2 = NULL;
 	    free_haps(cons, 1); cons = NULL;
 	    free_haps(ref_, 1); ref_ = NULL;
-	}
-	if (find_bubbles(g, 1, 0) < 0)
+	    graph_destroy(g);
 	    if ((kmer += 10) < MAX_KMER)
 		goto bigger_kmer;
+	    g = NULL;
+	    goto err;
+	}
+	if (find_bubbles(g, 1, 0) < 0) {
+	    graph_destroy(g);
+	    if ((kmer += 10) < MAX_KMER)
+		goto bigger_kmer;
+	    g = NULL;
+	    goto err;
+	}
     }
 
     // Map the graph to the reference.  We previously did this by
@@ -6063,9 +4455,6 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	// Eg this doesn't filter 20:3018064[3569]
     }
     graph2dot(g, "_G.dot", 0);
-
-    //fprintf(stderr, "Pruning\n");
-    //prune(g, argc > 3 ? atoi(argv[3]) : 2);
 
     // Compute new cigar strings
     uint32_t **new_cig = calloc(nhaps, sizeof(*new_cig));
@@ -6116,34 +4505,9 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     free(new_cig);
     free(new_ncig);
 
-    // Why g->kmer*2 for cons?
-    //trim_cigar_STR(ref->seq+g->kmer, shift, cons->seq+g->kmer*2-1, bams, nhaps, new_pos);
-
     ret = 0;
  err:
-    //if (ret != 0)
     calc_BAQ(bams, nhaps, ref_start, ref_len, ref_seq);
-
-#ifdef REVERSE
-    // And fixup new_pos too
-    for (i = 0; i < nhaps; i++)
-	bams[i]->core.pos = new_pos[i];
-    bam_reverse_array(hdr, bams, nbams);
-    for (i = 0; i < nhaps; i++) {
-	bam1_t *b = bams[i];
-	new_pos[i] = b->core.pos;
-	b->core.pos = orig_pos[i];
-    }
-
-    fprintf(stderr, "\nPOS2:\t");
-    for (i = 0; i < nbams; i++)
-	fprintf(stderr, "%d\t", bams[i]->core.pos);
-	//fprintf(stderr, "%d\t", new_pos[i]);
-    fprintf(stderr, "\n");
-    fflush(stderr);
-    free(orig_pos);
-    free(ref_seq); // we strduped it
-#endif
 
     graph_destroy(g);
     free_haps(haps, nhaps);
