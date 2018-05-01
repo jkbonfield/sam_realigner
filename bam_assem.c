@@ -1435,7 +1435,10 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 
     uint32_t *cigar = NULL;
     int ncigar = 0;
-#define SHRINK_ALIGN
+    // Extra context (g->kmer-1 bases) to the alignment still helps the alignment itself,
+    // despite potentially causing impossible to correct alignment regions if we get
+    // gaps within the first kmer.
+//#define SHRINK_ALIGN
     char *vs1 = vec2seq(v1, len1);
     char *vs2 = vec2seq(v2, len2);
 #ifdef SHRINK_ALIGN
@@ -4074,117 +4077,6 @@ int number_nodes_above(dgraph_t *g) {
 
 
 
-int count_snps(char *ref_seq, int ref_len, int ref_start,
-	       bam1_t **bams, int nbams, haps_t *haps,
-	       uint32_t **cig_a, uint32_t *ncig_a,
-	       int window) {
-    int (*cons)[4] = calloc(ref_len, sizeof(*cons));
-    int i, j;
-    int L[256] = {0};
-    L['A'] = 1; L['C'] = 2; L['G'] = 4; L['T'] = 8;
-    int max_snps = 0, snps = 0;
-
-    for (i = 0; i < nbams; i++) {
-	bam1_t *b = bams[i];
-	if (b->core.flag & BAM_FUNMAP)
-	    continue;
-
-	uint32_t *cig = cig_a ? cig_a[i] : bam_get_cigar(b);
-	uint32_t ncig = ncig_a ? ncig_a[i] : b->core.n_cigar;
-	unsigned char *seq = haps ? (unsigned char *)haps[i].seq : bam_get_seq(b);
-	unsigned char *qual = bam_get_qual(b);
-	int op, oplen = 0, cig_ind = 0;
-	int sp = 0; // seq pos, relative to seq start
-	int rp = b->core.pos;
-	for (j = 0; j < ncig; j++) {
-	    op = cig[cig_ind] & BAM_CIGAR_MASK;
-	    oplen = cig[cig_ind++] >> BAM_CIGAR_SHIFT;
-
-	    switch(op) {
-	    case BAM_CMATCH:
-	    case BAM_CEQUAL:
-	    case BAM_CDIFF:
-		while (oplen--) {
-		    unsigned char base = haps
-			? L[seq[sp]]
-			: bam_seqi(seq, sp);
-
-		    if (rp >= ref_start && rp < ref_start + ref_len) {
-			if (base & 1) cons[rp-ref_start][0] += qual[sp];
-			if (base & 2) cons[rp-ref_start][1] += qual[sp];
-			if (base & 4) cons[rp-ref_start][2] += qual[sp];
-			if (base & 8) cons[rp-ref_start][3] += qual[sp];
-		    }
-
-		    sp++;
-		    rp++;
-		}
-		break;
-
-	    case BAM_CINS:
-	    case BAM_CSOFT_CLIP:
-		sp += oplen;
-		oplen = 0;
-		break;
-
-	    case BAM_CDEL:
-		//if (oplen > 100) max_snps += 50; // hack
-
-	    case BAM_CREF_SKIP:
-		rp += oplen;
-		oplen = 0;
-		break;
-	    }
-	}
-    }
-
-    assert(window < 128);
-    char b1_w[128];
-    for (i = 0; i < ref_len; i++) {
-	// trivial consensus computation
-	unsigned char b1 = 4, b2 = 4;
-	unsigned int s1 = 0, s2 = 0;
-	for (j = 0; j < 4; j++) {
-	    if (s1 < cons[i][j]) {
-		s2 = s1; b2 = b1;
-		s1 = cons[i][j];
-		b1 = j;
-	    } else if (s2 < cons[i][j]) {
-		s2 = cons[i][j];
-		b2 = j;
-	    }
-	}
-	if (!(b2>10 && b2/b1 > .2))
-	    b2 = b1;
-
-	// naive count of snp diff to reference.
-
-	//if (s1 != 0 && b1 != 'N' && ("ACGTN"[b1] != ref_seq[i] || b1 != b2)) {
-	if (s1 != 0 && b1 != 'N' && ref_seq[i] != 'N' &&
-	    "ACGTN"[b1] != ref_seq[i] &&
-	    "ACGTN"[b2] != ref_seq[i]) {
-	    snps++;
-	    b1_w[i&127] = 'x';
-	} else {
-	    b1_w[i&127] = ref_seq[i];
-	}
-	if (i >= window && b1_w[(i-window)&127] != ref_seq[i-window])
-	    snps--;
-	if (max_snps < snps)
-	    max_snps = snps;
-
-//	fprintf(stderr, "%d\t%4d %4d %4d %4d\t%d %d  %c %c\t%c %c\n",
-//		i+ref_start,
-//		cons[i][0], cons[i][1], cons[i][2], cons[i][3],
-//		b1, b2, "ACGTN"[b1], "ACGTN"[b2], ref_seq[i],
-//		s1 == 0 || "ACGTN"[b1] == ref_seq[i] ? ' ' : '*');
-    }
-//    fprintf(stderr, "max_snps = %d\n", max_snps);
-
-    free(cons);
-    return max_snps;
-}
-
 static int default_kmer = KMER;
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *ref_seq, int ref_len, int ref_start,
@@ -4449,10 +4341,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	// Likely we've made an error somewhere.
 
 	fprintf(stderr, "Rejecting realignment as too many new SNPs\n");
-	goto err; // FIXME: done later now instead, but this is still useful? Why?
-
-	// FIXME: still not het aware.  Unsure why consensus doesn't include het locations.
-	// Eg this doesn't filter 20:3018064[3569]
+	goto err;
     }
     graph2dot(g, "_G.dot", 0);
 
@@ -4471,20 +4360,9 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	unmapped += (new_ncig[i] == 0);
     }
 
-#if 0
-    // Not helpful yet - needs more work.
-    int orig_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, NULL, NULL, 15);
-    int new_max_snp = count_snps(ref_seq, ref_len, ref_start, bams, nhaps, haps, new_cig, new_ncig, 15);
-
-    fprintf(stderr, "Max snp change from %d to %d\n", orig_max_snp, new_max_snp);
-
-    // reject only on newly appearing excessively long deletions
-    if (new_max_snp - orig_max_snp >= 5) goto err;
-#endif
-
 //#define CHECK_DEPTH // seem detrimental overall.
 #ifdef CHECK_DEPTH
-    if ((nhaps-unmapped) >= .7*(nhaps-orig_unmapped))
+    if ((double)unmapped/nhaps <= 0.3 || unmapped <= 1.3*orig_unmapped)
 #endif
 	{
 	    for (i = 0; i < nhaps; i++) {
