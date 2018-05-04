@@ -841,77 +841,6 @@ node_t *best_prev_node(dgraph_t *g, node_t *n) {
     return best_count != INT_MIN ? g->node[n->in[best_i]->n[0]] : NULL;
 }
 
-// TODO:
-//
-// Where a node has multiple edges, if one edge has a low count and
-// the path to the end (or where it merges again) is continuously low,
-// remove it and all nodes.  (Ideally we want to collapse those reads back
-// in to the graph somehow; maybe realign to haplotype.)
-//
-// Instead: take local greedy approach.  Good enough?
-
-void prune_tails(dgraph_t *g, int min_count) {
-    int done_something;
-
-    do {
-	int i, j;
-	done_something = 0;
-
-	for (i = g->nnodes-1; i >= 0; i--) {
-	    node_t *n = g->node[i];
-	    if (n->pruned)
-		continue;
-
-	    //fprintf(stderr, "Node %d:\n", i);
-
-	    int k;
-	    for (j = k = 0; j < n->n_out; j++, k++) {
-		n->out[k] = n->out[j];
-		edge_t *e = n->out[j];
-		if (e->count >= min_count || ref_node(g, e->n[1]))
-		    continue;
-
-		if (g->node[e->n[1]]->n_out)
-		    continue;
-
-		//fprintf(stderr, "Pruned %d\n", e->n[1]);
-		g->node[e->n[1]]->pruned = 1;
-		k--;
-		done_something = 1;
-	    }
-	    n->n_out = k;
-	}
-    } while (done_something);
-}
-
-void prune_heads(dgraph_t *g, int min_count) {
-    int done_something;
-
-    do {
-	int i, j;
-	done_something = 0;
-
-	for (i = 0; i < g->nnodes; i++) {
-	    node_t *n = g->node[i];
-	    if (n->pruned || n->n_in)
-		continue;
-
-	    for (j = 0; j < n->n_out; j++)
-		if (n->out[j]->count >= min_count || ref_edge(g, n->out[j]))
-		    break;
-
-	    if (j != n->n_out)
-		continue;
-
-	    for (j = 0; j < n->n_out; j++)
-		g->node[n->out[j]->n[1]]->n_in--;//-=n->out[j]->count;
-	    n->pruned = 1;
-	    done_something = 1;
-	    //fprintf(stderr, "Pruned %d\n", n->id);
-	}
-    } while (done_something);
-}
-
 static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node_t *n_end,
 				       int start, int (*vn)[5], node_t **path1, int np1, node_t **path2, int np2,
 				       int *p, int *x1, int *x2, node_t **l1, node_t **l2) {
@@ -1565,7 +1494,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     // => path 2:  14 13 12
 
     {
-	int cig_ind = 0, oplen = 0, op;
+	int cig_ind = 0, oplen = 0, op = 0;
 	int x1 = 0, x2 = 0, p = 0;
 
 	node_t *l1 = n_end;
@@ -2228,7 +2157,6 @@ int graph2dot_simple(dgraph_t *g, char *fn, int min_count) {
 
     char *seq = malloc(g->nnodes+1);
     int *nidx = malloc(g->nnodes * sizeof(*nidx));
-    int seq_len = 0;
     int *start = malloc(g->nnodes * sizeof(*start));
     int nstart = 0;
 
@@ -2272,7 +2200,7 @@ int graph2dot_simple(dgraph_t *g, char *fn, int min_count) {
 		    base = k;
 		}
 	    }
-	    seq[seq_len++] = "ACGTN"[base];
+	    seq[seq_len++] = "ACGTN"[(uint8_t)base];
 
 	    if (n->n_out != 1 || (n->n_out == 1 && g->node[n->out[0]->n[1]]->n_in != 1))
 		break;
@@ -2395,7 +2323,7 @@ int fix_tail(dgraph_t *g, node_t *last, char *seq, int len) {
     //fprintf(stderr, "Try tail fix on %.*s\n", len, seq);
 
     if (!last || last->pos < 0)
-	return; // cannot fix.
+	return 0; // cannot fix.
 
     int score = 0, best_score = 0, best_i = 0;
     for (i = 0; i < len-(g->kmer-1); i++) {
@@ -2705,50 +2633,6 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		}
 		break;
 
-		// Code below no longer necessary?  I think now insertions still have n->pos
-		// set, but also get n->ins set.  Hence n->pos == INT_MIN is only ever when
-		// we've strayed off the main path and are in a tail-tip.
-
-//		// bubble up to check if D or P before I
-//		node_t *np = NULL, *nn = n;
-//		int path[MAX_SEQ] = {0}, path_ind = 0;
-//		// Recheck all of this.
-//		// It dates back to before we added 2D coordinates of
-//		// Nth base inserted at Mth ref pos.
-//		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
-//		    np = nn->n_in ? g->node[nn->in[0]->n[0]] : NULL;
-//		    if (!np)
-//			break;
-//
-//		    // Track path of which out[x] leads from last to n.
-//		    int i;
-//		    for (i = 0; i < np->n_out; i++)
-//			if (np->out[i]->n[1] == nn->id)
-//			    break;
-//		    path[path_ind++] = i;
-//		}
-//
-//		if (path_ind == MAX_SEQ)
-//		    goto fail;
-//
-//		// Now replay the path in order from last->n
-//		np = last;
-//		if (--path_ind > 0 && np->n_out > path[path_ind])
-//		    np = g->node[np->out[path[path_ind]]->n[1]];
-//		while (--path_ind >= 0) {
-//		    //printf("Path %d\n", np->out[path[path_ind]]->n[1]);
-//		    if (np->pos >= 0 && !np->ins) {
-//			ADD_CIGAR(BAM_CDEL, 1);
-//			pos = np->pos;
-//		    } else {
-//			ADD_CIGAR(BAM_CPAD, 1);
-//		    }
-//		    if (path[path_ind] >= np->n_out)
-//			goto fail; // under what scenario does this happen?
-//		    np = g->node[np->out[path[path_ind]]->n[1]];
-//		}
-//
-//		ADD_CIGAR(BAM_CINS, 1);
 	    } else {
 		// soft clip from here on.
 		// OR... an internal mismatch that was pruned.
@@ -2778,7 +2662,6 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    cig_op = BAM_CSOFT_CLIP;
 	}
 
-    fail:
 	if (i+g->kmer-1 < len) {
 	    // trailing unaligned. FIXME: align it or soft-clip as appropriate.
 	    ADD_CIGAR(BAM_CSOFT_CLIP, len-(i+g->kmer-1));
@@ -2984,7 +2867,6 @@ int calc_BAQ(bam1_t **bams, int nbam, int ref_start, int ref_len, char *ref) {
 	uint32_t *cig = bam_get_cigar(b), cig_ind = 0;
 	uint32_t ncig = b->core.n_cigar;
 	uint64_t rp = b->core.pos, sp = 0;
-	uint8_t *seq = bam_get_seq(b);
 	uint8_t *qual = bam_get_qual(b);
 
 	for (j = 0; j < ncig; j++) {
@@ -3089,7 +2971,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
 	uint8_t *qual = h[i].qual;
-	int len = strlen(seq), j, k;
+	int len = strlen(seq), j;
 	double mq = 0;
 	for (j = 0; j < errk-1; j++)
 	    mq += perr[qual[j]];
@@ -3132,7 +3014,7 @@ int correct_errors(haps_t *h, int n, int errk, int min_count, int min_qual) {
     int avg = 0;
     {
 	// discard 10% of words and error correct those to remaining 90%
-	int F[100] = {0}, n = 0, t = 0, tlim = CORRECT_PERC * counth;
+	int F[100] = {0}, t = 0, tlim = CORRECT_PERC * counth;
 	HashIter *hiter = HashTableIterCreate();
 	while ((hi = HashTableIterNext(hash, hiter)))
 	    F[hi->data.x[0] > 99 ? 99 : hi->data.x[0]]++;
@@ -3404,7 +3286,7 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
     neighbours = HashTableCreate(count_good*16, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS |
 				 HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
 
-    int nn = 0, cg = 0;
+    int nn = 0;
     HashIter *hiter = HashTableIterCreate();
     while ((hi = HashTableIterNext(hash, hiter))) {
         if (hi->data.i >= thresh) {
@@ -3820,7 +3702,7 @@ int compute_consensus_above(dgraph_t *g, char *ref, int window) {
     int *nnum = malloc((g->nnodes + g->kmer + 1)*sizeof(int));
 
     // Find trailing node with highest above count.
-    int above = 0, end_n = 0, start_n;
+    int above = 0, end_n = 0, start_n = 0;
     for (i = 0; i < g->nnodes; i++) {
 	n = g->node[i];
 	if (n->pruned || n->n_out)
@@ -4088,7 +3970,7 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *cons1, char *cons2, int cons_len,
 		int max_snp, int window) {
     int i, kmer = default_kmer, ret = -1;
-    dgraph_t *g;
+    dgraph_t *g = NULL;
     haps_t *haps = NULL, *cons = NULL;
     haps_t *ref = NULL, *ref_ = NULL;
     int plus10 = 1;
@@ -4500,7 +4382,7 @@ haps_t *load_fasta(char *fn, int *nhaps) {
 
 int main(int argc, char **argv) {
     bam_hdr_t *hdr;
-    int nbams, *newpos, start, i;
+    int nbams, *newpos, start = 1, i;
 
     if (argc > 1 && strncmp(argv[1], "-k", 2) == 0) {
 	default_kmer = atoi(argv[1]+2);
