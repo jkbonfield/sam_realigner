@@ -151,8 +151,6 @@ void init_X128_score(int8_t X128[128][128], int mis_base, int mis, int mat) {
 	for (j = 0; j < 11; j++) {
 	    X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis;
 	    X128[tolower("AMRWCSYGKTN"[i])][(uc)"AMRWCSYGKTN"[j]] = mis;
-	    //X128[(uc)"AMRWCSYGKTN"[i]][tolower("AMRWCSYGKTN"[j])] = mis-1;
-	    //X128[tolower("AMRWCSYGKTN"[i])][(uc)"AMRWCSYGKTN"[j]] = mis-1;
 	    // A* vs C* is a partial match (pad wise). How to score?
 	    X128[tolower("AMRWCSYGKTN"[i])][tolower("AMRWCSYGKTN"[j])] = mis/2;
 	}
@@ -162,9 +160,6 @@ void init_X128_score(int8_t X128[128][128], int mis_base, int mis, int mat) {
 	X128[(uc)"ACGT"[i]][tolower("ACGT"[i])] = mat/2-1;
 	X128[tolower("ACGT"[i])][(uc)"ACGT"[i]] = mat/2-1;
 	X128[tolower("ACGT"[i])][tolower("ACGT"[i])] = mat/2-1;
-	//X128[(uc)"ACGT"[i]][tolower("ACGT"[i])] = mat/2+1;
-	//X128[tolower("ACGT"[i])][(uc)"ACGT"[i]] = mat/2+1;
-	//X128[tolower("ACGT"[i])][tolower("ACGT"[i])] = mat/2+1;
     }
 
     for (i = 0; i < 3; i++) {
@@ -183,11 +178,12 @@ void init_X128_score(int8_t X128[128][128], int mis_base, int mis, int mat) {
 
 // Convert a 6-way ACGT*N vector to X128 lookup value.
 int vec2X(int V[6]) {
-#if 0
+#if 0 // running as 1
     char b = "NTGKCYSBAWRDMHVN"[(!!V[0]<<3)+(!!V[1]<<2)+(!!V[2]<<1)+(!!V[3]<<0)];
     if (V[4]>0) b = tolower(b);
     return b;
 #else
+    // ambig if at least 1/4tr.
     int t=V[0]+V[1]+V[2]+V[3];
     int T=t>>2;
     char b = "NTGKCYSBAWRDMHVN"[((V[0]>T)<<3)+((V[1]>T)<<2)+((V[2]>T)<<1)+((V[3]>T)<<0)];
@@ -495,6 +491,7 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
     HashTableAdd(g->edge_hash, (char *)edge->n, 2*sizeof(*edge->n), hd, 0);
 
     // Reverse edge (incoming)
+    // FIXME: should be same pointer as above (shared edge) with n[0] and n[1] swapped
     edge_t *i_edge = malloc(sizeof(*edge));
     if (!i_edge)
 	return NULL;
@@ -502,8 +499,8 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
     if (n1->n_in >= MAX_EDGE)
 	return NULL;
     n2->in[n2->n_in++] = i_edge;
-    i_edge->n[0] = n2->id;
-    i_edge->n[1] = n1->id;
+    i_edge->n[1] = n2->id;
+    i_edge->n[0] = n1->id;
     i_edge->count = 0;
 
     return edge;
@@ -517,8 +514,8 @@ void move_edge_in(dgraph_t *g, edge_t *e, node_t *n1, node_t *n2) {
 	return;
     n1->out[n1->n_out++] = e;
     for (j = 0; j < n3->n_in; j++)
-	if (n3->in[j]->n[1] == n2->id)
-	    n3->in[j]->n[1] = n1->id;
+	if (n3->in[j]->n[0] == n2->id)
+	    n3->in[j]->n[0] = n1->id;
 
     // Correct edge_hash too.
     HashItem *hi = HashTableSearch(g->edge_hash, (char *)e->n, 2*sizeof(*e->n));
@@ -604,7 +601,7 @@ int decr_edge(dgraph_t *g, char *seq1, int len1, char *seq2, int len2, int ref) 
 		n1->out[j++] = n1->out[i];
 	n1->n_out = j;
 	for (i = j = 0; i < n2->n_in; i++)
-	    if (n2->in[i]->n[1] != n1->id)
+	    if (n2->in[i]->n[0] != n1->id)
 		n2->in[j++] = n2->in[i];
 	n2->n_in = j;
     }
@@ -689,7 +686,7 @@ int loop_check(dgraph_t *g, int loop_break) {
 		last->n_out--;
 		int z,k;
 		for (z = k = 0; z < to->n_in; z++) {
-		    if (to->in[z]->n[1] != last->id)
+		    if (to->in[z]->n[0] != last->id)
 			to->in[k++] = to->in[z];
 		}
 		assert(k == to->n_in-1);
@@ -846,7 +843,7 @@ node_t *best_prev_node(dgraph_t *g, node_t *n) {
 	    best_i = i;
 	}
     }
-    return best_count != INT_MIN ? g->node[n->in[best_i]->n[1]] : NULL;
+    return best_count != INT_MIN ? g->node[n->in[best_i]->n[0]] : NULL;
 }
 
 // TODO:
@@ -967,26 +964,26 @@ static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node
     // Merge incoming.
     for (i = 0; i < n2->n_in; i++) {
 	for (j = 0; j < n1->n_in; j++)
-	    if (n1->in[j]->n[1] == n2->in[i]->n[1] ||
-		(*x2+1 < np2 && n2->in[i]->n[1] == path2[*x2+1]->id))
+	    if (n1->in[j]->n[0] == n2->in[i]->n[0] ||
+		(*x2+1 < np2 && n2->in[i]->n[0] == path2[*x2+1]->id))
 		break;
-	if (j == n1->n_in && n2->in[i]->n[1] != start) { // not already a parent
+	if (j == n1->n_in && n2->in[i]->n[0] != start) { // not already a parent
 	    if (n1->n_in >= MAX_EDGE)
 		continue;
 	    n1->in[n1->n_in++] = n2->in[i];
-	    node_t *n3 = g->node[n2->in[i]->n[1]];
+	    node_t *n3 = g->node[n2->in[i]->n[0]];
 	    move_edge_out(g, n3, n2, n1);
 	    //for (j = 0; j < n3->n_out; j++)
 	    //    if (n3->out[j]->n[1] == n2->id)
 	    //	n3->out[j]->n[1] = n1->id;
-	} else if (j != n1->n_in && n2->in[i]->n[1] != start &&
+	} else if (j != n1->n_in && n2->in[i]->n[0] != start &&
 		   ((*x2+1 >= np2) ||
-		    (*x2+1 < np2 && path2[*x2+1]->id != n2->in[i]->n[1]))) {
+		    (*x2+1 < np2 && path2[*x2+1]->id != n2->in[i]->n[0]))) {
 	    // shared node, parent(n1) is also parent(n2) and
 	    // not on path, so ensure we delete the edge linking
 	    //to n2 // although we don't need to add it to n1 as
 	    // it's already there.
-	    node_t *n3 = g->node[n2->in[i]->n[1]];
+	    node_t *n3 = g->node[n2->in[i]->n[0]];
 	    // remove edge out
 	    int k, l;
 	    for (k = l = 0; k < n3->n_out; k++) {
@@ -1031,7 +1028,7 @@ static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node
 	node_t *t = g->node[n2->out[j]->n[1]];
 	int l;
 	for (l = k = 0; k < t->n_in; k++) {
-	    if (t->in[k]->n[1] != n2->id)
+	    if (t->in[k]->n[0] != n2->id)
 		t->in[l++] = t->in[k];
 	}
 	t->n_in = l;
@@ -1057,9 +1054,9 @@ static void node_common_ancestor_ins(dgraph_t *g, node_t *n1, node_t *n2, node_t
 	if (first_ins) {
 	    // Replace l1 in from n1 with in from n2.
 	    for (j = 0; j < l1->n_in; j++) {
-		if (l1->in[j]->n[1] == n1->id) {
+		if (l1->in[j]->n[0] == n1->id) {
 		    // FIXME: plus edge hash
-		    l1->in[j]->n[1] = n2->id;
+		    l1->in[j]->n[0] = n2->id;
 		    // FIXME: do we need to ensure this is in[0]?
 		}
 	    }
@@ -1080,8 +1077,8 @@ static void node_common_ancestor_ins(dgraph_t *g, node_t *n1, node_t *n2, node_t
 	    // Link n2 in to n1
 	    // Link n1 out to n2
 	    // Cull parent(n2) out (to n2)
-	    node_t *p2 = g->node[n2->in[0]->n[1]];
-	    n2->in[0]->n[1] = n1->id;
+	    node_t *p2 = g->node[n2->in[0]->n[0]];
+	    n2->in[0]->n[0] = n1->id;
 	    for (i = 0; i < n1->n_out; i++)
 		if (n1->out[i]->n[1] == n2->id)
 		    break;
@@ -1136,7 +1133,7 @@ int prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, in
 	last->n_out = j;
 
 	for (i = j = 0; i < curr->n_in; i++) {
-	    if (curr->in[i]->n[1] != last->id)
+	    if (curr->in[i]->n[0] != last->id)
 		curr->in[j++] = curr->in[i];
 	}
 	curr->n_in = j;
@@ -1300,7 +1297,7 @@ int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32
 // Node n_end has parents p1 and p2 which meet up again at some common
 // node n_start.  Find n_start.
 int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int *vis, int *nvis,
-			 int use_ref) {
+			 int use_ref, int shrink_align) {
     node_t **path1 = malloc(g->nnodes * sizeof(node_t *));
     node_t **path2 = malloc(g->nnodes * sizeof(node_t *));
     int np1 = 0, np2 = 0, i, j;
@@ -1313,7 +1310,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     node_t *n = p1;
     while (n) {
 	n->visited |= (1<<31);
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
 
     // Backtrack up p2 until we find 'visited' set
@@ -1321,7 +1318,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     while (n) {
 	if (n->visited & (1<<31))
 	    break;
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
     int start = n->id;
 
@@ -1329,7 +1326,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     n = p1;
     while (n) {
 	n->visited &= ~(1<<31);
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
 
     // Create (reversed) paths
@@ -1338,7 +1335,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	//fprintf(stderr, "1[%d]: %d\n", np1, n->id);
 	path1[np1++] = n;
 	n->visited = (1<<29);
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
 
     n = p2;
@@ -1346,7 +1343,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	//fprintf(stderr, "2[%d]: %d\n", np2, n->id);
 	path2[np2++] = n;
 	n->visited = (1<<29)-1;
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
 
     // Recurse down path1 looking for anything that hits path2 and
@@ -1391,7 +1388,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 //    printf(" => path 1: ");
 //    while (n && n->id != start) {
 //	printf(" %d", n->id);
-//	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+//	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
 //    }
 //    printf(" %d, len=%d\n", start, np1);
 //
@@ -1399,7 +1396,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 //    printf(" => path 2: ");
 //    while (n && n->id != start) {
 //	printf(" %d", n->id);
-//	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+//	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
 //    }
 //    printf(" %d, len=%d\n", start, np2);
 
@@ -1414,7 +1411,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     while (n && n->id != start) {
 	memcpy(v1[len1++], n->bases[g->kmer-1], 5*sizeof(int));
 	l = n;
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
     for (i = g->kmer-2; l && i >= 0; i--)
 	// with SHRINK_ALIGN we only end up using n->bases[g->kmer-1] as
@@ -1426,7 +1423,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     while (n && n->id != start) {
 	memcpy(v2[len2++], n->bases[g->kmer-1], 5*sizeof(int));
 	l = n;
-	n = n->n_in ? g->node[n->in[0]->n[1]] : NULL;
+	n = n->n_in ? g->node[n->in[0]->n[0]] : NULL;
     }
     for (i = g->kmer-2; l && i >= 0; i--)
 	// with SHRINK_ALIGN we only end up using n->bases[g->kmer-1] as
@@ -1438,13 +1435,12 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     // Extra context (g->kmer-1 bases) to the alignment still helps the alignment itself,
     // despite potentially causing impossible to correct alignment regions if we get
     // gaps within the first kmer.
-//#define SHRINK_ALIGN
     char *vs1 = vec2seq(v1, len1);
     char *vs2 = vec2seq(v2, len2);
-#ifdef SHRINK_ALIGN
-    len1-=g->kmer-1;
-    len2-=g->kmer-1;
-#endif
+    if (shrink_align) {
+	len1-=g->kmer-1;
+	len2-=g->kmer-1;
+    }
     fprintf(stderr, "use_ref=%d\n%.*s\n%.*s\n", use_ref, len1, vs1, len2, vs2);
     int s;
     fprintf(stderr, "X128[A][G]=%d,%d mat=%d\n", X128['A']['G'], X128['G']['A'], X128['A']['A']);
@@ -1459,12 +1455,12 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
     fprintf(stderr, "Score=%d\n", s);
 
     ksw_print_aln(stderr, len1, vs1, len2, vs2, ncigar, cigar);
-#ifdef SHRINK_ALIGN
-    len1+=g->kmer-1;
-    len2+=g->kmer-1;
-    cigar=realloc(cigar,++ncigar*sizeof(*cigar));
-    cigar[ncigar-1]=BAM_CMATCH + ((g->kmer-1)<<BAM_CIGAR_SHIFT);
-#endif
+    if (shrink_align) {
+	len1+=g->kmer-1;
+	len2+=g->kmer-1;
+	cigar=realloc(cigar,++ncigar*sizeof(*cigar));
+	cigar[ncigar-1]=BAM_CMATCH + ((g->kmer-1)<<BAM_CIGAR_SHIFT);
+    }
 //    {
 //	fprintf(stderr, "v1 %.*s\nv2 %.*s\n", len1, vs1, len2, vs2);
 //	fprintf(stderr, "vx %d;", ncigar);
@@ -1490,7 +1486,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 
     n = n_end;
     for (i = j = 0; i < n->n_in; i++) {
-	if (n->in[i]->n[1] == (np2 ? path2[0]->id : start))
+	if (n->in[i]->n[0] == (np2 ? path2[0]->id : start))
 	    continue;
 	else
 	    n->in[j++] = n->in[i];
@@ -1619,6 +1615,12 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	    }
 	}
 
+	if (!l1) {
+	    free(path1);
+	    free(path2);
+	    return -1;
+	}
+
 	// gap at end
 	// TODO: Consider just culling these nodes so cigar generation turns
 	// into soft-clips.
@@ -1653,8 +1655,8 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	    if (i == n2->n_out)
 		move_edge_out(g, n2, l2, l1);
 	    for (i = 0; i < l1->n_in; i++)
-		if (l1->in[i]->n[1] == n1->id)
-		    l1->in[i]->n[1] = n2->id; // FIXME: plus edge hash?
+		if (l1->in[i]->n[0] == n1->id)
+		    l1->in[i]->n[0] = n2->id; // FIXME: plus edge hash?
 
 	    x2 = np2-1;
 	    n2 = path2[x2];
@@ -1769,7 +1771,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 //	    //node_t *n = p->p[p->np-1];
 //	    node_t *n = p->n;
 //	    if (!n) continue;
-//	    printf(" %d(%d,%d)", n->id, n->in[0]->n[1], p->pn->id);
+//	    printf(" %d(%d,%d)", n->id, n->in[0]->n[0], p->pn->id);
 //	}
 //	printf("\n");
 
@@ -1781,17 +1783,25 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 	    if (!n) continue;
 
 	    if (n->visited) {
-		int merge_id = n->in[0]->n[1];
+		int merge_id = n->in[0]->n[0];
 //		printf("Bubble detected with node %d (%d, %d)\n",
 //		       n->id, merge_id, pn->id);
 		//graph2dot(g, "_before.dot", 0);
 
 		// Note this could form a loop, but if so it gets broken for us.
-		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis, use_ref) < 0) {
+#if 1
+		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis, use_ref, 1) < 0) {
 		    ret = -1;
 		    goto err;
 		}
-
+#else
+		if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis, use_ref, 0) < 0) {
+		    if (node_common_ancestor(g, n, pn, g->node[merge_id], vis, nvis, use_ref, 1) < 0) {
+			ret = -1;
+			goto err;
+		    }
+		}
+#endif
 		// FIXME: merge forks.
 		// Test: just cull one instead.
 		if (lp)
@@ -1807,7 +1817,7 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 			//node_t *n = p->p[p->np-1];
 			node_t *n = p->n;
 			if (!n) continue;
-			printf(" %d(%d,%d)", n->id, n->in[0]->n[1], p->pn->id);
+			printf(" %d(%d,%d)", n->id, n->in[0]->n[0], p->pn->id);
 		    }
 		    printf("\n");
 		}
@@ -1832,10 +1842,10 @@ int find_bubble_from2(dgraph_t *g, int id, int use_ref, int min_depth, int *vis,
 	    }
 
 	    // Ensure parent node is always incoming[0].
-	    if (n->in[0]->n[1] != pn->id) {
+	    if (n->in[0]->n[0] != pn->id) {
 		int i;
 		for (i = 0; i < n->n_in; i++)
-		    if (n->in[i]->n[1] == pn->id)
+		    if (n->in[i]->n[0] == pn->id)
 			break;
 		assert(i < n->n_in);
 		struct edge *tmp = n->in[0];
@@ -1911,8 +1921,8 @@ void validate_graph(dgraph_t *g) {
 
 	int above = -1;
 	for (j = 0; j < n->n_in; j++) {
-	    //assert(n->in[j]->n[0] == n->id);
-	    node_t *p = g->node[n->in[j]->n[1]];
+	    //assert(n->in[j]->n[1] == n->id);
+	    node_t *p = g->node[n->in[j]->n[0]];
 	    for (k = 0; k < p->n_out; k++)
 		if (p->out[k]->n[1] == n->id)
 		    break;
@@ -1928,7 +1938,7 @@ void validate_graph(dgraph_t *g) {
 	    //assert(n->out[j]->n[0] == n->id);
 	    node_t *p = g->node[n->out[j]->n[1]];
 	    for (k = 0; k < p->n_in; k++)
-		if (p->in[k]->n[1] == n->id)
+		if (p->in[k]->n[0] == n->id)
 		    break;
 	    assert(k < p->n_in);
 	}
@@ -2033,7 +2043,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 #if 0
 	// incoming edges
 	for (j = 0; j < n->n_in; j++) {
-	    fprintf(fp, "  n_%d -> n_%d [color=\"blue\"]\n", n->id, n->in[j]->n[1]);
+	    fprintf(fp, "  n_%d -> n_%d [color=\"blue\"]\n", n->id, n->in[j]->n[0]);
 	}
 #endif
     }
@@ -2174,7 +2184,7 @@ int graph2dot(dgraph_t *g, char *fn, int wrap) {
 #if 0
 	// incoming edges
 	for (j = 0; j < n->n_in; j++) {
-	    fprintf(fp, "  n_%d -> n_%d [color=\"blue\"]\n", n->id, n->in[j]->n[1]);
+	    fprintf(fp, "  n_%d -> n_%d [color=\"blue\"]\n", n->id, n->in[j]->n[0]);
 	}
 #endif
     }
@@ -2243,7 +2253,7 @@ int graph2dot_simple(dgraph_t *g, char *fn, int min_count) {
 	    continue;
 
 	if (n->n_in != 1 || n->n_out > 1 ||
-	    (n->n_in == 1 && g->node[n->in[0]->n[1]]->n_out != 1)) {
+	    (n->n_in == 1 && g->node[n->in[0]->n[0]]->n_out != 1)) {
 	    start[nstart] = n->id;
 	    nidx[n->id] = nstart++;
 	}
@@ -2497,7 +2507,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 //	    // to check the actual sequence does!).
 //	    node_t *np = n;
 //	    while (np->n_in > 0 /*&& np->pos < 0*/ && (np->ref & IS_CON)) {
-//		np = g->node[np->in[0]->n[1]];
+//		np = g->node[np->in[0]->n[0]];
 //		np_dist++;
 //	    }
 //
@@ -2551,7 +2561,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    up_one:
 		//printf("Search for %.*s", g->kmer, sub_k-j);
 		for (k = 0; k < n->n_in; k++) { // added first only here
-		    node_t *s2 = g->node[n->in[k]->n[1]];
+		    node_t *s2 = g->node[n->in[k]->n[0]];
 		    if (s2->pos < 0)
 			continue;
 		    // and if j >= g->kmer then s2->count is high?
@@ -2711,7 +2721,7 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 //		// It dates back to before we added 2D coordinates of
 //		// Nth base inserted at Mth ref pos.
 //		for (;last && last != np && path_ind < MAX_SEQ; nn=np) {
-//		    np = nn->n_in ? g->node[nn->in[0]->n[1]] : NULL;
+//		    np = nn->n_in ? g->node[nn->in[0]->n[0]] : NULL;
 //		    if (!np)
 //			break;
 //
@@ -3700,7 +3710,7 @@ haps_t *compute_consensus(dgraph_t *g) {
 	    int k;
 	    node_t *n2 = g->node[n->out[j]->n[1]];
 	    for (k = 0; k < n2->n_in; k++) {
-		if (n2->in[k]->n[1] == n->id) {
+		if (n2->in[k]->n[0] == n->id) {
 		    n2->in[k]->count = n->out[j]->count;
 		    break;
 		}
@@ -3745,8 +3755,8 @@ haps_t *compute_consensus(dgraph_t *g) {
 	    }
 	}
 	if (best_i >= 0) {
-	    //printf("Best prev = %d\n", n->in[best_i]->n[1]);
-	    n = g->node[n->in[best_i]->n[1]];
+	    //printf("Best prev = %d\n", n->in[best_i]->n[0]);
+	    n = g->node[n->in[best_i]->n[0]];
 	    if (islower(vec2X(n->bases[g->kmer-1])))
 		kputc(tolower(n->hi[0]->key[g->kmer-1]),&seq);
 	    else
@@ -3835,9 +3845,9 @@ int compute_consensus_above(dgraph_t *g, char *ref, int window) {
 	nnum[j] = n->id;
 
 	for (above = i = 0; i < n->n_in; i++) {
-	    node_t *p = g->node[n->in[i]->n[1]];
+	    node_t *p = g->node[n->in[i]->n[0]];
 	    if (above <= p->above)
-		above = p->above, start_n = n->in[i]->n[1];
+		above = p->above, start_n = n->in[i]->n[0];
 	}
 	n = n->n_in ? g->node[start_n] : NULL;
     }
@@ -4002,10 +4012,10 @@ void number_nodes_above_recurse(dgraph_t *g, node_t *n, int *queue, int *nqueue,
 
     // FIXME: try summing n->count instead of +1 per layer
     for (i = 0; i < n->n_in; i++)
-	//if (count < g->node[n->in[i]->n[1]]->above + 1)
-	//    count = g->node[n->in[i]->n[1]]->above + 1;
-	if (count < g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1)
-	    count = g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1;
+	//if (count < g->node[n->in[i]->n[0]]->above + 1)
+	//    count = g->node[n->in[i]->n[0]]->above + 1;
+	if (count < g->node[n->in[i]->n[0]]->above + g->node[n->in[i]->n[0]]->count+1)
+	    count = g->node[n->in[i]->n[0]]->above + g->node[n->in[i]->n[0]]->count+1;
 
     //fprintf(stderr, "node %d, count %d, in %d, out %d\n", n->id, count, n->n_in, n->n_out);
 
@@ -4019,10 +4029,10 @@ void number_nodes_above_recurse(dgraph_t *g, node_t *n, int *queue, int *nqueue,
 	if (n->n_in > 1) {
 	    int c2 = n->above;
 	    for (i = 0; i < n->n_in; i++) {
-		//if (c2 < g->node[n->in[i]->n[1]]->above + 1)
-		//    c2 = g->node[n->in[i]->n[1]]->above + 1;
-		if (c2 < g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1)
-		    c2 = g->node[n->in[i]->n[1]]->above + g->node[n->in[i]->n[1]]->count+1;
+		//if (c2 < g->node[n->in[i]->n[0]]->above + 1)
+		//    c2 = g->node[n->in[i]->n[0]]->above + 1;
+		if (c2 < g->node[n->in[i]->n[0]]->above + g->node[n->in[i]->n[0]]->count+1)
+		    c2 = g->node[n->in[i]->n[0]]->above + g->node[n->in[i]->n[0]]->count+1;
 	    }
 	    if (c2 > curr_above) {
 		n->above = c2;
