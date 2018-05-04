@@ -491,23 +491,19 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
     HashTableAdd(g->edge_hash, (char *)edge->n, 2*sizeof(*edge->n), hd, 0);
 
     // Reverse edge (incoming)
-    // FIXME: should be same pointer as above (shared edge) with n[0] and n[1] swapped
-    edge_t *i_edge = malloc(sizeof(*edge));
-    if (!i_edge)
-	return NULL;
-    g->edge[g->nedges++] = i_edge;
     if (n1->n_in >= MAX_EDGE)
 	return NULL;
-    n2->in[n2->n_in++] = i_edge;
-    i_edge->n[1] = n2->id;
-    i_edge->n[0] = n1->id;
-    i_edge->count = 0;
+    n2->in[n2->n_in++] = edge;
 
     return edge;
 }
 
 // Move edge e with new source (n2->n3) to n1 (n1->n3)
 void move_edge_in(dgraph_t *g, edge_t *e, node_t *n1, node_t *n2) {
+    HashItem *hi = HashTableSearch(g->edge_hash, (char *)e->n, 2*sizeof(*e->n));
+    assert(hi);
+    HashTableDel(g->edge_hash, hi, 0);
+
     node_t *n3 = g->node[e->n[1]];
     int j;
     if (n1->n_out >= MAX_EDGE)
@@ -518,8 +514,6 @@ void move_edge_in(dgraph_t *g, edge_t *e, node_t *n1, node_t *n2) {
 	    n3->in[j]->n[0] = n1->id;
 
     // Correct edge_hash too.
-    HashItem *hi = HashTableSearch(g->edge_hash, (char *)e->n, 2*sizeof(*e->n));
-    assert(hi);
     HashData hd;
     hd.p = e;
     e->n[0] = n1->id;
@@ -540,6 +534,7 @@ void move_edge_out(dgraph_t *g, node_t *n1, node_t *l1, node_t *n2) {
     e = n1->out[j];
     HashItem *hi = HashTableSearch(g->edge_hash, (char *)e->n, 2*sizeof(*e->n));
     assert(hi);
+    HashTableDel(g->edge_hash, hi, 0);
 
     HashData hd;
     hd.p = e;
@@ -964,7 +959,7 @@ static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node
     // Merge incoming.
     for (i = 0; i < n2->n_in; i++) {
 	for (j = 0; j < n1->n_in; j++)
-	    if (n1->in[j]->n[0] == n2->in[i]->n[0] ||
+	    if (n1->in[j] == n2->in[j] ||
 		(*x2+1 < np2 && n2->in[i]->n[0] == path2[*x2+1]->id))
 		break;
 	if (j == n1->n_in && n2->in[i]->n[0] != start) { // not already a parent
@@ -999,7 +994,7 @@ static void node_common_ancestor_match(dgraph_t *g, node_t *n1, node_t *n2, node
     for (i = 0; i < n2->n_out; i++) {
 	// Migrate n2->out unless n2->out on // n1 path
 	for (j = 0; j < n1->n_out; j++)
-	    if (n1->out[j]->n[1] == n2->out[i]->n[1] ||
+	    if (n1->out[j] == n2->out[i] ||
 		(*x2 > 0 && path2[*x2-1] && n2->out[i]->n[1] == path2[*x2-1]->id))
 		break;
 	if (j == n1->n_out) { // not already a child
