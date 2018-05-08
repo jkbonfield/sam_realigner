@@ -501,8 +501,8 @@ edge_t *add_edge(dgraph_t *g, node_t *n1, node_t *n2) {
 // Move edge e with new source (n2->n3) to n1 (n1->n3)
 void move_edge_in(dgraph_t *g, edge_t *e, node_t *n1, node_t *n2) {
     HashItem *hi = HashTableSearch(g->edge_hash, (char *)e->n, 2*sizeof(*e->n));
-    assert(hi);
-    HashTableDel(g->edge_hash, hi, 0);
+    if (hi)
+	HashTableDel(g->edge_hash, hi, 0);
 
     node_t *n3 = g->node[e->n[1]];
     int j;
@@ -533,8 +533,8 @@ void move_edge_out(dgraph_t *g, node_t *n1, node_t *l1, node_t *n2) {
     // Correct edge_hash too.
     e = n1->out[j];
     HashItem *hi = HashTableSearch(g->edge_hash, (char *)e->n, 2*sizeof(*e->n));
-    assert(hi);
-    HashTableDel(g->edge_hash, hi, 0);
+    if (hi)
+	HashTableDel(g->edge_hash, hi, 0);
 
     HashData hd;
     hd.p = e;
