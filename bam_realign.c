@@ -84,7 +84,7 @@
 #define INS_LEN_PERC 0.1
 
 // Percentage of seqs with large soft-clips
-#define CLIP_PERC 0.2
+#define CLIP_PERC 0.1
 
 // Amount of over-depth to consider this as as suspect region
 #define OVER_DEPTH 3.0

@@ -185,7 +185,7 @@ int vec2X(int V[6]) {
 #else
     // ambig if at least 1/4tr.
     int t=V[0]+V[1]+V[2]+V[3];
-    int T=t>>2;
+    int T=t>>3;
     char b = "NTGKCYSBAWRDMHVN"[((V[0]>T)<<3)+((V[1]>T)<<2)+((V[2]>T)<<1)+((V[3]>T)<<0)];
     if (V[4]>0) b = tolower(b);
     if (t < V[4]/4) b = '-';
