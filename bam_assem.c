@@ -2966,6 +2966,7 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
     HashItem *hi;
     int i, counth = 0, countw = 0, tbases = 0;
     string_alloc_t *sp = string_pool_create(errk*10000);
+    int nc = 0;
 
     char **new_seq = calloc(n, sizeof(char *));
     if (!new_seq)
@@ -3024,10 +3025,8 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    if (F[i] >= min_count)
 		count_good += F[i]; // approximation
 	}
-	if (!cnt) {
-	    free(new_seq);
-	    return 0;
-	}
+	if (!cnt)
+	    goto err;
 	double mean = (double)sum/cnt;
 	double sd = sqrt(sum_sq/cnt - mean*mean);
 	fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
@@ -3045,10 +3044,8 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 		sum += i*F[i];
 		sum_sq += i*i*F[i];
 	    }
-	    if (!cnt) {
-		free(new_seq);
-		return 0;
-	    }
+	    if (!cnt)
+		goto err;
 	    mean = (double)sum/cnt;
 	    sd = sqrt(sum_sq/cnt - mean*mean);
 
@@ -3114,7 +3111,6 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
     //-----------
     // Now scan through all kmers in our sequences to see if they're rare but
     // with a close match to a known good kmer (neighbour).  Correct if so.
-    int nc = 0;
     int nbases = 0;
     for (i = 0; i < n; i++) {
 	char *seq = h[i].seq;
@@ -3188,6 +3184,7 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    strcpy(h[i].seq, new_seq[i]);
     }
 
+ err:
     string_pool_destroy(sp);
     HashTableDestroy(hash, 0);
     HashTableDestroy(neighbours, 0);
