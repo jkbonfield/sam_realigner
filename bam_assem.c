@@ -88,6 +88,7 @@ appropriate location within the string.
 // #define CORRECT_MULT 5
 
 //---------------------------------------------------------------------------
+static int verbosity = 0;
 
 char base_val[128];
 
@@ -1048,7 +1049,8 @@ int prune_extra_recurse(dgraph_t *g, node_t *last, node_t *curr, node_t *end, in
 	return 0;
 
     if ((curr->visited & ~(1<<30)) == (other_path & ~(1<<30))) {
-	fprintf(stderr, "Found internal bubble. Prune link %d->%d\n", last->id, curr->id);
+	if (verbosity > 5)
+	    fprintf(stderr, "Found internal bubble. Prune link %d->%d\n", last->id, curr->id);
 	int i, j;
 	for (i = j = 0; i < last->n_out; i++) {
 	    if (last->out[i]->n[1] != curr->id)
@@ -1112,28 +1114,33 @@ void ksw_print_aln(FILE *fp, int len1, char *seq1, int len2, char *seq2, int nci
 	int oplen = cigar[i] >> BAM_CIGAR_SHIFT;
 	switch(op) {
 	case BAM_CMATCH:
-	    fprintf(fp,
-		    "vv %dM\t%.*s\nvv %dM\t%.*s\n", oplen, oplen, seq1+i1, oplen, oplen, seq2+i2);
+	    if (verbosity > 6)
+		fprintf(fp, "vv %dM\t%.*s\nvv %dM\t%.*s\n", oplen, oplen, seq1+i1, oplen, oplen, seq2+i2);
 	    i1+=oplen;
 	    i2+=oplen;
 	    break;
 
 	case BAM_CINS:
-	    fprintf(fp, "vv %dI\t%.*s\n", oplen, oplen, seq1+i1);
+	    if (verbosity > 6)
+		fprintf(fp, "vv %dI\t%.*s\n", oplen, oplen, seq1+i1);
 	    i1 += oplen;
-	    fprintf(fp, "vv %dI\t", oplen);
-	    while (oplen--)
-		fputc('-', fp);
-	    fputc('\n', fp);
+	    if (verbosity > 6) {
+		fprintf(fp, "vv %dI\t", oplen);
+		while (oplen--)
+		    fputc('-', fp);
+		fputc('\n', fp);
+	    }
 	    break;
 
 	case BAM_CDEL: {
-	    fprintf(fp, "vv %dD\t", oplen);
-	    int z = oplen;
-	    while (z--)
-		fputc('-', fp);
-	    fputc('\n', fp);
-	    fprintf(fp, "vv %dD\t%.*s\n", oplen, oplen, seq2+i2);
+	    if (verbosity > 6) {
+		fprintf(fp, "vv %dD\t", oplen);
+		int z = oplen;
+		while (z--)
+		    fputc('-', fp);
+		fputc('\n', fp);
+		fprintf(fp, "vv %dD\t%.*s\n", oplen, oplen, seq2+i2);
+	    }
 	    i2 += oplen;
 	    break;
 	}
@@ -1214,7 +1221,8 @@ int ksw_snp_count(int len1, char *seq1, int len2, char *seq2, int ncigar, uint32
     free(mis);
     free(indel);
 
-    fprintf(stderr, "new max snp count %d\n", max_snp);
+    if (verbosity > 4)
+	fprintf(stderr, "new max snp count %d\n", max_snp);
     return max_snp;
 }
 
@@ -1365,9 +1373,11 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	len1-=g->kmer-1;
 	len2-=g->kmer-1;
     }
-    fprintf(stderr, "use_ref=%d\n%.*s\n%.*s\n", use_ref, len1, vs1, len2, vs2);
+    if (verbosity > 5) {
+	fprintf(stderr, "use_ref=%d\n%.*s\n%.*s\n", use_ref, len1, vs1, len2, vs2);
+	fprintf(stderr, "X128[A][G]=%d,%d mat=%d\n", X128['A']['G'], X128['G']['A'], X128['A']['A']);
+    }
     int s;
-    fprintf(stderr, "X128[A][G]=%d,%d mat=%d\n", X128['A']['G'], X128['G']['A'], X128['A']['A']);
     if (use_ref)
 	s=ksw_global_end(len1, (uint8_t *)vs1, len2, (uint8_t *)vs2,
 			 128, (int8_t *)X128_ref, GOPEN_REF, GEXT_REF, 0,
@@ -1376,7 +1386,8 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	s=ksw_global_end(len1, (uint8_t *)vs1, len2, (uint8_t *)vs2,
 			 128, (int8_t *)X128, GOPEN, GEXT, 0,
 			 &ncigar, &cigar,  1,1,1,1);
-    fprintf(stderr, "Score=%d\n", s);
+    if (verbosity > 5)
+	fprintf(stderr, "Score=%d\n", s);
 
     ksw_print_aln(stderr, len1, vs1, len2, vs2, ncigar, cigar);
     if (shrink_align) {
@@ -1569,7 +1580,7 @@ int node_common_ancestor(dgraph_t *g, node_t *n_end, node_t *p1, node_t *p2, int
 	    // path2[np2-1] and the current tail path2[x2] (n2).
 	    // Note these may be the same node if there is only 1 left.
 
-	    fprintf(stderr, "i  - %2d\n", n2->id);
+	    //fprintf(stderr, "i  - %2d\n", n2->id);
 
 	    // tail:
 	    // link n2 out to l1 in
@@ -2404,10 +2415,8 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	    break;
     }
 
-    if (!n) {
-	fprintf(stderr, "No match found for seq\n");
+    if (!n)
 	goto unmapped;
-    }
 
 //    if (n->pos < 0) {
 //	// No mapped kmer, so start with the first unmapped one instead
@@ -2623,7 +2632,8 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 		// also a node prior to this that we didn't observe in our
 		// kmer stepping? (ie deletion)
 
-		fprintf(stderr, "Unmapped kmer %.*s in seq %.*s\n", n->hi[0]->key_len, n->hi[0]->key, len - i, s1-1);
+		if (verbosity > 5)
+		    fprintf(stderr, "Unmapped kmer %.*s in seq %.*s\n", n->hi[0]->key_len, n->hi[0]->key, len - i, s1-1);
 		int new_suffix = fixed_suffix ? 0 : fix_tail(g, last, s1-1, len-i);
 		if (new_suffix) {
 		    if (!(n = find_node(g, s1-1, g->kmer, 0)) || n->pruned)
@@ -2642,7 +2652,8 @@ int seq2cigar_new(dgraph_t *g, char *ref, int shift, bam1_t *b, char *seq, int *
 	}
 
 	if (cig_op == BAM_CINS && n && n->ins == 0) {
-	    fprintf(stderr, "ending on ins, n->ins=%d last_ins=%d cig_len=%d\n", n->ins, last_ins, cig_len);
+	    if (verbosity > 5)
+		fprintf(stderr, "ending on ins, n->ins=%d last_ins=%d cig_len=%d\n", n->ins, last_ins, cig_len);
 	    // partial match to known insertion plus partial mismatch => softclip?
 	    //
 	    // Eg should be 5M 10I, but want 5M 8I 2S due to seq error
@@ -3029,8 +3040,9 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    goto err;
 	double mean = (double)sum/cnt;
 	double sd = sqrt(sum_sq/cnt - mean*mean);
-	fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
-		(int)(mean-sd*2), (int)(mean+sd*2+.999));
+	if (verbosity > 5)
+	    fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
+		    (int)(mean-sd*2), (int)(mean+sd*2+.999));
 
 	thresh = mean-sd*2 > 3 ? mean-sd*2 : 3;
 	if (thresh > 3) {
@@ -3049,8 +3061,9 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 	    mean = (double)sum/cnt;
 	    sd = sqrt(sum_sq/cnt - mean*mean);
 
-	    fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
-		    (int)(mean-sd*2), (int)(mean+sd*2+.999));
+	    if (verbosity > 5)
+		fprintf(stderr, "Mean %f sd %f => %d..%d\n", mean, sd,
+			(int)(mean-sd*2), (int)(mean+sd*2+.999));
 	}
 
 	thresh = mean-sd*2 > min_count ? mean-sd*2 : min_count;
@@ -3068,8 +3081,9 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
     // Instead we build the complete neighbourhood and compare every
     // kmer/2 within sequence vs all neighbours.
 
-    fprintf(stderr, "%d unique words, %d est. good, %d total words, threshold %d\n",
-	    countw, count_good, counth, thresh);
+    if (verbosity > 4)
+	fprintf(stderr, "%d unique words, %d est. good, %d total words, threshold %d\n",
+		countw, count_good, counth, thresh);
     neighbours = HashTableCreate(count_good*16, HASH_DYNAMIC_SIZE | HASH_POOL_ITEMS |
 				 HASH_NONVOLATILE_KEYS | HASH_FUNC_TCL);
 
@@ -3173,8 +3187,9 @@ int correct_errors_fast(haps_t *h, int n, int errk, int min_count) {
 		    nbases++;
 	}
     }
-    fprintf(stderr, "Corrected %d bases (%5.2f%%)\n",
-	    nbases, 100.0*nbases/tbases);
+    if (verbosity > 3)
+	fprintf(stderr, "Corrected %d bases (%5.2f%%)\n",
+		nbases, 100.0*nbases/tbases);
 
     // Finally replace the original sequences with the edited ones.
     // We delay this to here so our hash table keys don't change under
@@ -3309,11 +3324,13 @@ int trim_adapters(haps_t *h, int n, char *fn, int kmer, int min_qual) {
 	}
 
 	if (left_count >= ADAPTER_COUNT) {
-	    fprintf(stderr, "%s: trim left at %d: %.*s\n", h[i].name, left_end, left_end, h[i].seq);
+	    if (verbosity > 4)
+		fprintf(stderr, "%s: trim left at %d: %.*s\n", h[i].name, left_end, left_end, h[i].seq);
 	    memset(h[i].seq, 'N', left_end);
 	}
 	if (right_count >= ADAPTER_COUNT) {
-	    fprintf(stderr, "%s: trim right at %d: %.*s\n", h[i].name, right_end, len-right_end, h[i].seq+right_end);
+	    if (verbosity > 4)
+		fprintf(stderr, "%s: trim right at %d: %.*s\n", h[i].name, right_end, len-right_end, h[i].seq+right_end);
 	    memset(h[i].seq+right_end, 'N', len-right_end);
 	}
 
@@ -3755,12 +3772,14 @@ static int default_kmer = KMER;
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *ref_seq, int ref_len, int ref_start,
 		char *cons1, char *cons2, int cons_len,
-		int max_snp, int window, int min_mqual) {
+		int max_snp, int window, int min_mqual, int verbose) {
     int i, kmer = default_kmer, ret = -1;
     dgraph_t *g = NULL;
     haps_t *haps = NULL, *cons = NULL;
     haps_t *ref = NULL, *ref_ = NULL;
     int plus10 = 1;
+
+    verbosity = verbose;
 
     //dump_input(hdr, bams, nbams, ref_seq, ref_len, ref_start, cons1, cons2, cons_len);
 
@@ -3773,7 +3792,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     haps = bam2haps(bams, nhaps);
 
     // Successive rounds allows for fixing more than 1 error in a read.
-    fprintf(stderr, "Correcting\n");
+    if (verbosity > 3)
+	fprintf(stderr, "Correcting\n");
     correct_errors_fast(haps, nhaps, 29, 3);
     correct_errors_fast(haps, nhaps, 27, 3);
     correct_errors_fast(haps, nhaps, 25, 2);
@@ -3804,7 +3824,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     // a broken homo-polymer.  In which case keep it unmapped and ignore
     // it.
     for (; kmer < MAX_KMER; kmer += 10) {
-	fprintf(stderr, "Building graph with kmer=%d, nseqs=%d\n", kmer, nhaps);
+	if (verbosity > 3)
+	    fprintf(stderr, "Building graph with kmer=%d, nseqs=%d\n", kmer, nhaps);
 	g = graph_create(kmer);
 	for (i = 0; i < nhaps; i++) {
 	    if (add_seq(g, haps[i].seq, 0, 0) != 0) {
@@ -3813,7 +3834,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		    del_seq(g, haps[i].seq, 0, 0);
 		    continue;
 		}
-		fprintf(stderr, "Loop detected within mapped seq %s\n", haps[i].seq);
+		if (verbosity > 3)
+		    fprintf(stderr, "Loop detected within mapped seq %s\n", haps[i].seq);
 		break;
 	    }
 	}
@@ -3822,16 +3844,19 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	    break;
 
 	// FIXME: we get loops too often.  How and why?
-	fprintf(stderr, "Loop detected, increasing kmer\n");
+	if (verbosity > 4)
+	    fprintf(stderr, "Loop detected, increasing kmer\n");
 
 	graph_destroy(g);
 	g = NULL;
     }
     if (kmer >= MAX_KMER) {
-	fprintf(stderr, "No suitable kmer found\n");
+	if (verbosity > 4)
+	    fprintf(stderr, "No suitable kmer found\n");
 	goto err;
     }
-    fprintf(stderr, "Using kmer %d\n", kmer);
+    if (verbosity > 4)
+	fprintf(stderr, "Using kmer %d\n", kmer);
 
     graph2dot(g, "f.dot", 0);
     //graph2dot_simple(g, "x.dot", 5);
@@ -3885,13 +3910,15 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	memcpy(ref->seq + g->kmer-1, ref_seq, ref_len);
 	memset(ref->seq, 'N', g->kmer-1);
 	if (add_seq(g, ref->seq, 0, IS_REF) < 0 || loop_check(g, 0)) {
-	    fprintf(stderr, "Loop when adding reference\n");
+	    if (verbosity > 4)
+		fprintf(stderr, "Loop when adding reference\n");
 	    graph_destroy(g);
 	    if ((kmer += 10) < MAX_KMER) {
 		free_haps(ref_, 1); ref_ = NULL;
 		goto bigger_kmer;
 	    }
-	    fprintf(stderr, "No suitable kmer found\n");
+	    if (verbosity > 4)
+		fprintf(stderr, "No suitable kmer found\n");
 	    g = NULL; goto err;
 	}
 
@@ -3903,9 +3930,11 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     if (!(cons = compute_consensus(g)))
 	goto err;
 
-    fprintf(stderr, "cons=%s\n", cons->seq);
+    if (verbosity > 5)
+	fprintf(stderr, "cons=%s\n", cons->seq);
     if (add_seq(g, cons->seq, 0, (ref?0:IS_REF)|IS_CON) < 0 || loop_check(g, 0)) {
-	fprintf(stderr, "Loop when adding consensus\n");
+	if (verbosity > 4)
+	    fprintf(stderr, "Loop when adding consensus\n");
 	graph_destroy(g);
 	if ((kmer += 10) < MAX_KMER) {
 	    free_haps(cons, 1); cons = NULL;
@@ -3962,7 +3991,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 
     // c2 only as c1 should be represented better by main assembly?
     // FIXME: make optional
-    fprintf(stderr, "Cons len = %d\n", cons_len);
+    if (verbosity > 5)
+	fprintf(stderr, "Cons len = %d\n", cons_len);
     if (cons1 || cons2) {
 	if (cons1) add_seq(g, cons1, cons_len, 0);
 	if (cons2) add_seq(g, cons2, cons_len, 0);
@@ -3997,7 +4027,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 	// Reject as too many extra clustered variants.
 	// Likely we've made an error somewhere.
 
-	fprintf(stderr, "Rejecting realignment as too many new SNPs\n");
+	if (verbosity > 4)
+	    fprintf(stderr, "Rejecting realignment as too many new SNPs\n");
 	goto err;
     }
     graph2dot(g, "_G.dot", 0);
@@ -4054,7 +4085,8 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
     free_haps(cons, 1);
     free_haps(ref_, 1);
 
-    fprintf(stderr, "Finished.\n");
+    if (verbosity > 3)
+	fprintf(stderr, "Finished.\n");
 
     return ret;
 }
@@ -4179,7 +4211,7 @@ int main(int argc, char **argv) {
 	free(h);
     }
 
-    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0, 0, 15, 999) < 0) {
+    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0, 0, 15, 999, 1) < 0) {
 	fprintf(stderr, "Realign failed\n");
 	return 1;
     }

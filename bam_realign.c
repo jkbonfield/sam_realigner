@@ -317,6 +317,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     int count = 0, ba_sz = 0;
     bam1_t **ba = NULL;
     uint32_t nbases = 0;
+    int verbosity = cd->params->verbose;
 
     // FIXME start bi at >= start_ovl and then filter until core.pos > end.
     RB_FOREACH(bi, bam_sort, bl) {
@@ -349,13 +350,15 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     cram_realigner_params *p = cd->params;
     int depth = nbases / (end_ovl - start_ovl + 1);
     if (count > p->max_reads || end_ovl - start_ovl + 1 > 2*p->max_reg || depth > p->max_depth) {
-	fprintf(stderr, "    Skipping %d reads, size %d, depth %d, region %d-%d\n",
-		count, end_ovl - start_ovl, depth, start_ovl, end_ovl);
+	if (verbosity > 1)
+	    fprintf(stderr, "    Skipping %d reads, size %d, depth %d, region %d-%d\n",
+		    count, end_ovl - start_ovl, depth, start_ovl, end_ovl);
 	return 0;
     }
 
-    fprintf(stderr, "    Realign %d reads, size %d, depth %d, region %d-%d\n",
-	    count, end_ovl - start_ovl, depth, start_ovl, end_ovl);
+    if (verbosity > 1)
+	fprintf(stderr, "    Realign %d reads, size %d, depth %d, region %d-%d\n",
+		count, end_ovl - start_ovl, depth, start_ovl, end_ovl);
 
     if (count == 0)
 	return 0;
@@ -405,7 +408,7 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
 		    cd->params->cons1 ? cons : NULL,
 		    cd->params->cons2 ? cons2 : NULL,
 		    cons_len, max_snp, window,
-		    cd->params->min_mqual) < 0) {
+		    cd->params->min_mqual, cd->params->verbose) < 0) {
 	free(new_pos);
 	free(ba);
 	if (fai)
@@ -541,7 +544,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
     const bam_pileup1_t *plp;
     pileup_cd cd = {0};
     bam_sorted_list *b_hist = bam_sorted_list_new();
-    int counter = 0;
+    int counter = 100000;
 
     cd.fp = in;
     cd.header = header;
@@ -612,7 +615,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	total_col++;
 
 	if (n_plp > MAX_DEPTH) {
-	    if (p->verbose > 1)
+	    if (p->verbose > 2)
 		fprintf(stderr, "Excessive depth at tid %d, pos %d, depth %d\n", tid, pos, n_plp);
 	    start_reg = end_reg = n_plp ? plp[0].b->core.pos : 0;
 	    start_ovl = end_ovl = 0;
@@ -738,7 +741,7 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	}
 
 	if ((clipped - 1.0) >= p->clip_perc * n_overlap && clipped > 1) {
-	    if (p->verbose > 1)
+	    if (p->verbose > 2)
 		fprintf(stderr, "%s %d\tUnexpected high clip rate, %d of %d\n",
 			tid_name(header,tid), pos, clipped, n_overlap);
 	    suspect |= 2;
@@ -768,14 +771,14 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 	    //printf("Top 2 = %d x %d,  %d x %d, out of %d, ov/n_plp=%f\n", qv1, qd1, qv2, qd2, indel_overlap, (double)indel_overlap / n_plp);
 	    
 	    if ((indel_overlap - qd1 - qd2) > p->ins_len_perc * (indel_overlap + .1)) {
-		if (p->verbose > 1)
+		if (p->verbose > 2)
 		    fprintf(stderr, "%s %d\tSuspect indel, depth %d / %d, common %d+%d\n",
 			    tid_name(header,tid), pos, n_plp, indel_overlap, qd1, qd2);
 		suspect |= 4;
 	    }
 
 	    if ((double)indel_overlap < p->indel_ov_perc * n_plp) {
-		if (p->verbose > 1)
+		if (p->verbose > 2)
 		    fprintf(stderr, "%s %d\tSuspect drop in indel overlap %d vs %d\n",
 			    tid_name(header,tid), pos, indel_overlap, n_plp);
 		suspect |= 8;
@@ -797,7 +800,8 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		end_ovl = right_most;
 		// Expand start_ovl and end_ovl to include read extents that overlap start_reg
 		check_overlap(b_hist, start_reg, &start_ovl, &end_ovl);
-		fprintf(stderr, "PROB start %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
+		if (p->verbose > 2)
+		    fprintf(stderr, "PROB start %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
 		status = S_PROB;
 	    } else {
 		// Periodic flush here of reads ending before  pos-MARGIN
@@ -810,14 +814,16 @@ int transcode(cram_realigner_params *p, samFile *in, samFile *out,
 		end_reg = last_pos + p->margin;
 		if (end_ovl < right_most)
 		    end_ovl = right_most;
-		//fprintf(stderr, "PROB extnd %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
+		if (p->verbose > 3)
+		    fprintf(stderr, "PROB extnd %d .. %d (%d .. %d)\n", start_reg, end_reg, start_ovl, end_ovl);
 	    } else {
 
 		int start_ovl2 = MAX(1, start_ovl - p->cons_margin);
 		int end_ovl2 = MAX(1, end_ovl + p->cons_margin);
 
 		if (left_most > end_reg && pos > end_ovl + p->cons_margin) {
-		    fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", last_pos, start_reg, end_reg, start_ovl, end_ovl);
+		    if (p->verbose > 2)
+			fprintf(stderr, "PROB end %d %d .. %d (%d .. %d)\n", last_pos, start_reg, end_reg, start_ovl, end_ovl);
 		    realign_list(&cd, header, b_hist,
 				 cons  + start_ovl2 - start_cons,
 				 cons2 + start_ovl2 - start_cons,

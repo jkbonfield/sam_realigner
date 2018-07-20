@@ -3,6 +3,9 @@
 
 #include <htslib/sam.h>
 
-extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos, char *ref, int ref_len, int ref_pos, char *cons1, char *cons2, int len, int max_snp, int window, int min_mqual);
+extern int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
+		       char *ref, int ref_len, int ref_pos,
+		       char *cons1, char *cons2, int len, int max_snp,
+		       int window, int min_mqual, int verbose);
 
 #endif
