@@ -3755,7 +3755,7 @@ static int default_kmer = KMER;
 int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		char *ref_seq, int ref_len, int ref_start,
 		char *cons1, char *cons2, int cons_len,
-		int max_snp, int window) {
+		int max_snp, int window, int min_mqual) {
     int i, kmer = default_kmer, ret = -1;
     dgraph_t *g = NULL;
     haps_t *haps = NULL, *cons = NULL;
@@ -4030,7 +4030,12 @@ int bam_realign(bam_hdr_t *hdr, bam1_t **bams, int nbams, int *new_pos,
 		    free(new_cig[i]);
 		} else {
 		    new_pos[i] = b->core.pos; // ie. don't change it
-		    b->core.flag |= BAM_FUNMAP;
+		    // Heuristic: mark as unmapped if it has a low map qual,
+		    //or non-trivial CIGAR.
+		    //
+		    // This needs to be made an option.
+		    if (b->core.qual < min_mqual || b->core.n_cigar > 1)
+			b->core.flag |= BAM_FUNMAP;
 		}
 	    }
 	}
@@ -4174,7 +4179,7 @@ int main(int argc, char **argv) {
 	free(h);
     }
 
-    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0, 0, 15) < 0) {
+    if (bam_realign(hdr, bams, nbams, newpos, ref, ref?strlen(ref):0, start, NULL, NULL, 0, 0, 15, 999) < 0) {
 	fprintf(stderr, "Realign failed\n");
 	return 1;
     }

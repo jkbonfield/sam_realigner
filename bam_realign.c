@@ -92,6 +92,9 @@
 // Percentage of reads spanning indel.
 #define INDEL_OVERLAP_PERC 0.5
 
+// Minimum mapping quality to retain reads that didn't realise
+#define MIN_MQUAL_NO_ASSEM 999
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -137,6 +140,7 @@ typedef struct {
     int clevel;
     int cons1, cons2;
     int max_depth, min_indel, max_reg, max_reads;
+    int min_mqual;
 } cram_realigner_params;
 
 //-----------------------------------------------------------------------------
@@ -400,7 +404,8 @@ int realign_list(pileup_cd *cd, bam_hdr_t *hdr, bam_sorted_list *bl,
     if (bam_realign(hdr, ba, count, new_pos, ref, seq_len, start_ovl,
 		    cd->params->cons1 ? cons : NULL,
 		    cd->params->cons2 ? cons2 : NULL,
-		    cons_len, max_snp, window) < 0) {
+		    cons_len, max_snp, window,
+		    cd->params->min_mqual) < 0) {
 	free(new_pos);
 	free(ba);
 	if (fai)
@@ -946,6 +951,7 @@ void usage(FILE *fp) {
     fprintf(fp, "-d int            Maximum depth to permit realignment [%d]\n", MAX_DEPTH);
     fprintf(fp, "-n int            Maximum number of reads to permit realignment [%d]\n", MAX_READS);
     fprintf(fp, "-N int            Maximum region size for realignment [%d]\n", MAX_REG);
+    fprintf(fp, "-Q int            Keep reads failing assembly if mqual >= INT and simple CIGAR [%d]\n", MIN_MQUAL_NO_ASSEM);
     fprintf(fp, "\n");
 }
 
@@ -974,9 +980,10 @@ int main(int argc, char **argv) {
 	.min_indel     = MIN_INDEL,         // -i
 	.max_reads     = MAX_READS,         // -n
 	.max_reg       = MAX_REG,           // -N
+	.min_mqual     = MIN_MQUAL_NO_ASSEM,// -Q
     };
 
-    while ((opt = getopt(argc, argv, "I:O:m:c:vC:vZ:P:V:r:R:uX:d:i:n:N:")) != -1) {
+    while ((opt = getopt(argc, argv, "I:O:m:c:vC:vZ:P:V:r:R:uX:d:i:n:N:Q:")) != -1) {
 	switch (opt) {
 	case 'u':
 	    params.clevel = 0;
@@ -1044,6 +1051,10 @@ int main(int argc, char **argv) {
 
 	case 'N':
 	    params.max_reg = atoi(optarg);
+	    break;
+
+	case 'Q':
+	    params.min_mqual = atoi(optarg);
 	    break;
 
 	default: /* ? */
